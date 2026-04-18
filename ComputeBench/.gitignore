@@ -1,0 +1,15 @@
+# ComputeBench build artifacts
+*.o
+*.a
+*.so
+bin/cb
+obj/
+
+# Results (keep structure but not individual runs)
+results/*.json
+reports/*.md
+
+# Temp files
+*.tmp
+*.swp
+*~
