@@ -1,0 +1,29 @@
+{
+  "diary": {
+    "count": 5,
+    "last_ts": "2026-04-19T03:44:11.202157",
+    "last_day": 2,
+    "last_sessions": 1,
+    "last_messages": 15,
+    "last_filename": "day2-2026-04-16-almost_became_a_cyber_succubus.md",
+    "last_latency_s": 16.7,
+    "last_skip": "no_sessions_today"
+  },
+  "compact": {
+    "count": 5,
+    "last_ts": "2026-04-19T03:44:11.287018",
+    "last_invoke": 5,
+    "last_sessions": 1,
+    "last_messages": 28,
+    "last_latency_s": 3.8,
+    "last_model": "k2p5",
+    "last_skip": "stm_hash_unchanged"
+  },
+  "stm": {
+    "count": 1,
+    "last_ts": "2026-04-19T03:49:22.904419",
+    "last_sessions": 1,
+    "last_messages": 28,
+    "last_chars": 5062
+  }
+}
