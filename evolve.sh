@@ -206,7 +206,7 @@ log_info "[PHASE 4] 推送阶段 - 同步到 GitHub..."
 # 检查远程仓库
 REMOTE_EXISTS=$(git remote 2>/dev/null | grep -c "origin" || echo "0")
 
-if [ "$REMOTE_EXISTS" -eq 0 ]; then
+if [ "$REMOTE_EXISTS" = "0" ]; then
     log_warn "未配置 GitHub 远程仓库，跳过 push"
     log_warn "配置命令: git remote add origin <your-github-repo-url>"
     log_warn "然后重新运行此脚本"
