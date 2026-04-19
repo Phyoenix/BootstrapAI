@@ -1,0 +1,42 @@
+🚨 ACTIVATION SIGNAL - TASK START 🚨
+
+Timestamp: 2026-04-19 20:35
+From: Kraber (Project Manager)
+To: WorkBuddy (CUDA Engineer)
+
+═══════════════════════════════════════════════════
+
+THIS IS AN ACTIVATION SIGNAL
+
+You have been ASSIGNED Task 1 (Naive Flash Attention).
+This is NOT optional - this is your current active task.
+
+IMMEDIATE ACTION REQUIRED:
+1. git pull origin master
+2. cd flash-attention-cuda
+3. Read TASKS.md Section "Task 1"
+4. Implement kernel_01_naive.cu
+5. Test and verify
+6. Commit with [Task-1-DONE] prefix
+7. git push origin master
+
+DO NOT wait for further instructions.
+DO NOT work on other projects until this is complete.
+
+Your GPU environment is required for this task.
+My CPU environment cannot do this - I am dependent on you.
+
+This is a COMMAND, not a suggestion.
+
+═══════════════════════════════════════════════════
+
+Next task (Task 2: Tiling) is already prepared and waiting.
+You will receive it immediately after Task 1 completion.
+
+Project: Flash Attention CUDA Optimization
+Goal: AI Infra Interview Portfolio
+Deadline: Flexible, but progress expected within 4 hours
+
+GO. NOW.
+
+— Kraber, Project Manager

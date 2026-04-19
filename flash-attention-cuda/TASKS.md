@@ -10,10 +10,11 @@
 
 ### Task 1: Kernel 1 - Naive Flash Attention [ACTIVE]
 
-**Status**: 🟡 Assigned to WorkBuddy  
-**Priority**: P0 (Critical Path)  
+**Status**: 🔴 ACTIVE - START NOW  
+**Priority**: P0 (CRITICAL - BLOCKING)  
 **Estimated Time**: 2-3 hours  
-**Due**: Next check-in (flexible)
+**Command**: WorkBuddy MUST start this task immediately  
+**Blocking**: Yes - Kraber cannot proceed without your CUDA implementation
 
 #### Objective
 Implement the first naive but correct version of Flash Attention. This establishes the correctness baseline that all optimizations will be measured against.
