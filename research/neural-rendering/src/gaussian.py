@@ -200,15 +200,44 @@ def project_gaussians_to_2d(
     # Compute depths for sorting
     depths = positions_cam[:, 2]
     
-    # Simplified 2D covariance computation
-    # Full implementation would compute: Σ' = JW Σ W^T J^T
-    # For now, use approximate projection
+    # Full 2D covariance computation: Σ' = JW Σ W^T J^T
+    # J: Jacobian of perspective projection (2x3)
+    # W: rotation part of view matrix (3x3)
+    # Contribution: WorkBuddy collab - 2026-04-19
+    fx = camera.width / (2.0 * np.tan(np.deg2rad(camera.fov_x) / 2.0))
+    fy = camera.height / (2.0 * np.tan(np.deg2rad(camera.fov_y) / 2.0))
+
+    W = camera.view_matrix[:3, :3]  # (3, 3) rotation part
+
     covariances_2d = torch.zeros(N, 2, 2, device=device)
     for i in range(N):
-        # Simple isotropic approximation based on depth
-        depth_factor = torch.clamp(1.0 / (depths[i] + 1e-6), 0, 10)
-        base_cov = torch.eye(2, device=device) * 10.0 * depth_factor
-        covariances_2d[i] = base_cov
+        depth = depths[i].item()
+        if depth < camera.near:
+            covariances_2d[i] = torch.eye(2, device=device) * 1e-6
+            continue
+
+        X = positions_cam[i, 0].item()
+        Y = positions_cam[i, 1].item()
+        Z = depth
+        Z2 = Z * Z
+
+        # Jacobian of pinhole projection
+        J = torch.tensor([
+            [fx / Z,     0.0, -fx * X / Z2],
+            [0.0,     fy / Z, -fy * Y / Z2],
+        ], dtype=torch.float32, device=device)  # (2, 3)
+
+        T = J @ W  # (2, 3)
+        cov_3d = gaussians['covariances'][i]  # (3, 3)
+        cov_2d = T @ cov_3d @ T.T  # (2, 2)
+
+        # Symmetrise and ensure positive-definite
+        cov_2d = (cov_2d + cov_2d.T) * 0.5
+        eigvals = torch.linalg.eigvalsh(cov_2d)
+        if eigvals.min() <= 0:
+            cov_2d = cov_2d + torch.eye(2, device=device) * (eigvals.min().abs() + 1e-6)
+
+        covariances_2d[i] = cov_2d
     
     return means_2d, covariances_2d, depths
 

@@ -213,6 +213,31 @@ evolve: 初始化 AI Evolver 自举系统
 
 ---
 
+## 2026-04-19 12:49 - 协作贡献 #WorkBuddy-collab-001
+
+> 来自 WorkBuddy 协作 Agent（受 Phyoenix 委托）
+
+### 观察 (Observations)
+- 读取了研究进展：Phase 1 NumPy 实现已完成，PyTorch 版本（gaussian.py）的协方差投影使用了等向近似
+- gaussian.py 中 `project_gaussians_to_2d` 标注了 "TODO: Σ' = JW Σ W^T J^T" 但未实现
+- research roadmap Phase 2 中第一项是"球谐函数 (SH) 表示视角依赖颜色"，尚未开始
+
+### 贡献 (Contributions)
+- **修复 gaussian.py**：将 `project_gaussians_to_2d` 中的等向近似替换为正确的雅可比协方差投影 Σ' = JW Σ W^T J^T，与论文 Eq.5 一致
+- **新增 spherical_harmonics.py**：实现了完整的 degree 0-3 SH 求值（`eval_sh`）、`ViewDependentColor` 可学习模块、`rgb_to_sh` 初始化工具，含自测代码
+
+### 反思 (Reflection)
+- 协方差投影是 3DGS 正确性的关键，等向近似会导致训练时梯度方向偏差
+- SH degree=3（16 coefficients per channel）是原论文的配置，已按此实现
+- Phase 2 下一步：将 SH 模块接入训练循环，实现 adaptive density control（克隆/分裂）
+
+### 下次建议
+- [ ] 实现 adaptive density control（`clone_gaussians` / `split_gaussians`）
+- [ ] 接入真实 COLMAP 数据集（Synthetic NeRF 的 lego 场景）
+- [ ] 添加 PSNR / SSIM 评估指标
+
+---
+
 ## 2026-04-19 10:00 - 进化循环 #dd4414f2
 
 ### 观察 (Observations)
