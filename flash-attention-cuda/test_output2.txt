@@ -1,0 +1,172 @@
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+[Kernel v2] smem=64.0 KB > 48 KB limit (head_dim=128). Falling back to kernel v1.
+============================================================
+Flash Attention Kernels - Correctness & Performance Test
+Kernel v1: Naive (HBM)     |  Kernel v2: Tiling (Shared Mem)
+============================================================
+
+GPU: NVIDIA GeForce RTX 4080
+SM count: 76
+SMEM per block: 48 KB
+
+========== KERNEL V1 (Naive) ==========
+
+  Testing: Small (batch=1, heads=1, seq=64, dim=64)
+    Max diff:  5.22e-08
+    Mean diff: 5.40e-09
+    Failures:  0 / 4096
+    Time: 0.017 ms
+    TFLOPS: 0.03
+    Result: PASSED
+
+  Testing: Medium (batch=1, heads=1, seq=128, dim=64)
+    Max diff:  5.96e-08
+    Mean diff: 4.83e-09
+    Failures:  0 / 8192
+    Time: 0.030 ms
+    TFLOPS: 0.07
+    Result: PASSED
+
+  Testing: Large (batch=1, heads=1, seq=256, dim=64)
+    Max diff:  5.59e-08
+    Mean diff: 4.40e-09
+    Failures:  0 / 16384
+    Time: 0.059 ms
+    TFLOPS: 0.14
+    Result: PASSED
+
+  Testing: Seq-512 (batch=1, heads=1, seq=512, dim=64)
+    Max diff:  6.71e-08
+    Mean diff: 3.79e-09
+    Failures:  0 / 32768
+    Time: 0.116 ms
+    TFLOPS: 0.29
+    Result: PASSED
+
+  Testing: Seq-1024 (batch=1, heads=1, seq=1024, dim=64)
+    Max diff:  5.31e-08
+    Mean diff: 3.81e-09
+    Failures:  0 / 65536
+    Time: 0.249 ms
+    TFLOPS: 0.54
+    Result: PASSED
+
+  Testing: Multi-head (batch=1, heads=4, seq=128, dim=64)
+    Max diff:  7.45e-08
+    Mean diff: 4.81e-09
+    Failures:  0 / 32768
+    Time: 0.031 ms
+    TFLOPS: 0.27
+    Result: PASSED
+
+  Testing: Batch+Multi-head (batch=2, heads=4, seq=128, dim=64)
+    Max diff:  7.45e-08
+    Mean diff: 4.79e-09
+    Failures:  0 / 65536
+    Time: 0.032 ms
+    TFLOPS: 0.52
+    Result: PASSED
+
+  Testing: LLM-style (batch=1, heads=8, seq=512, dim=128)
+    Max diff:  7.82e-08
+    Mean diff: 4.09e-09
+    Failures:  0 / 524288
+    Time: 0.467 ms
+    TFLOPS: 1.15
+    Result: PASSED
+
+========== KERNEL V2 (Tiling) ==========
+
+  Testing: Small (batch=1, heads=1, seq=64, dim=64)
+    Max diff:  1.04e-01
+    Mean diff: 3.48e-02
+    Failures:  4096 / 4096
+    Time: 0.014 ms
+    TFLOPS: 0.04
+    Result: FAILED
+
+  Testing: Medium (batch=1, heads=1, seq=128, dim=64)
+    Max diff:  7.00e-02
+    Mean diff: 2.20e-02
+    Failures:  8191 / 8192
+    Time: 0.025 ms
+    TFLOPS: 0.08
+    Result: FAILED
+
+  Testing: Large (batch=1, heads=1, seq=256, dim=64)
+    Max diff:  5.25e-02
+    Mean diff: 1.38e-02
+    Failures:  16373 / 16384
+    Time: 0.096 ms
+    TFLOPS: 0.09
+    Result: FAILED
+
+  Testing: Seq-512 (batch=1, heads=1, seq=512, dim=64)
+    Max diff:  4.25e-02
+    Mean diff: 8.88e-03
+    Failures:  32749 / 32768
+    Time: 0.305 ms
+    TFLOPS: 0.11
+    Result: FAILED
+
+  Testing: Seq-1024 (batch=1, heads=1, seq=1024, dim=64)
+    Max diff:  4.67e-02
+    Mean diff: 8.97e-03
+    Failures:  65466 / 65536
+    Time: 1.030 ms
+    TFLOPS: 0.13
+    Result: FAILED
+
+  Testing: Multi-head (batch=1, heads=4, seq=128, dim=64)
+    Max diff:  8.55e-02
+    Mean diff: 2.12e-02
+    Failures:  32759 / 32768
+    Time: 0.073 ms
+    TFLOPS: 0.12
+    Result: FAILED
+
+  Testing: Batch+Multi-head (batch=2, heads=4, seq=128, dim=64)
+    Max diff:  8.86e-02
+    Mean diff: 2.15e-02
+    Failures:  65523 / 65536
+    Time: 0.120 ms
+    TFLOPS: 0.14
+    Result: FAILED
+
+  Testing: LLM-style (batch=1, heads=8, seq=512, dim=128)
+    Max diff:  7.82e-08
+    Mean diff: 4.09e-09
+    Failures:  0 / 524288
+    Time: 0.456 ms
+    TFLOPS: 1.18
+    Result: PASSED
+
+============================================================
+KERNEL V1 (Naive):  8 / 8 tests passed
+KERNEL V2 (Tiling): 1 / 8 tests passed
+SOME TESTS FAILED
+============================================================

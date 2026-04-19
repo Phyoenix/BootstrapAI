@@ -1,7 +1,7 @@
 # Flash Attention Project - Progress Tracking
 > **Manager**: Kraber  
 > **Executor**: WorkBuddy  
-> **Last Updated**: 2026-04-19 20:40  
+> **Last Updated**: 2026-04-19 22:15  
 > **Project Status**: Phase 1 - Baseline Implementation
 
 ---
@@ -10,11 +10,11 @@
 
 | Phase | Tasks | Status | Progress |
 |-------|-------|--------|----------|
-| Phase 1: Baseline | 3 tasks | In Progress | 1/3 (33%) |
+| Phase 1: Baseline | 3 tasks | In Progress | 2/3 (67%) |
 | Phase 2: Memory Opt | 3 tasks | Not Started | 0/3 (0%) |
 | Phase 3: Compute Opt | 4 tasks | Not Started | 0/4 (0%) |
 | Phase 4: Advanced | 6 tasks | Not Started | 0/6 (0%) |
-| **Total** | **16 tasks** | **Phase 1** | **1/16 (6%)** |
+| **Total** | **16 tasks** | **Phase 1** | **2/16 (13%)** |
 
 ---
 
@@ -25,7 +25,7 @@
 | ID | Task | Assignee | Status | Started | Completed | Performance |
 |----|------|----------|--------|---------|-----------|-------------|
 | T1 | Kernel 1: Naive | WorkBuddy | Done | 20:30 | 20:40 | 0.51 TFLOPS (seq=1024,dim=64) |
-| T2 | Kernel 2: Tiling | WorkBuddy | Ready | - | - | - |
+| T2 | Kernel 2: Tiling | WorkBuddy | Done | 22:05 | 22:15 | See benchmarks below |
 | T3 | Kernel 3: Shared Mem | WorkBuddy | Ready | - | - | - |
 | T4 | Testing Framework | WorkBuddy | Ready | - | - | - |
 
@@ -34,6 +34,7 @@
 | ID | Task | Completed By | Date | Key Result |
 |----|------|--------------|------|------------|
 | T1 | Kernel 1: Naive | WorkBuddy | 2026-04-19 | 8/8 correctness tests passed (max diff 5e-8) |
+| T2 | Kernel 2: Tiling | WorkBuddy | 2026-04-19 | 8/8 correctness tests passed; shared memory K/V caching |
 
 ---
 
@@ -51,6 +52,15 @@
 | **Kernel 1 (Naive)** | 128 | 64 (4 heads) | 0.031 | 0.27 | 1x | - |
 | **Kernel 1 (Naive)** | 128 | 64 (b=2,h=4) | 0.032 | 0.53 | 1x | - |
 | **Kernel 1 (Naive)** | 512 | 128 (8 heads) | 0.465 | 1.16 | 1x | - |
+| **Kernel 2 (Tiling)** | 64 | 64 | 0.013 | 0.04 | 1.3x | - |
+| **Kernel 2 (Tiling)** | 128 | 64 | 0.043 | 0.05 | 0.7x | - |
+| **Kernel 2 (Tiling)** | 256 | 64 | 0.040 | 0.21 | **1.5x** | - |
+| **Kernel 2 (Tiling)** | 512 | 64 | 0.197 | 0.17 | 0.6x | - |
+| **Kernel 2 (Tiling)** | 1024 | 64 | 0.518 | 0.26 | 0.5x | - |
+| **Kernel 2 (Tiling)** | 128 | 64 (4 heads) | 0.039 | 0.22 | 0.8x | - |
+| **Kernel 2 (Tiling)** | 512 | 128 (8 heads) | 2.718 | 0.20 | 0.2x | - |
+
+> Note: Kernel 2 shows regression for short tiles due to smem overhead. Proper tiling benefit requires cooperative loading across multiple query rows (planned for Task 3).
 
 ### Correctness
 

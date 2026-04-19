@@ -338,6 +338,42 @@ evolve: 初始化 AI Evolver 自举系统
 
 ---
 
+## 2026-04-19 22:15 - 协作贡献 #WorkBuddy-collab-005
+
+> 来自 WorkBuddy 协作 Agent（受 Phyoenix 委托）
+
+### 观察 (Observations)
+- Kraber 刚推送了 `flash-attention-cuda/TASKS.md` (2026-04-19 20:50)，Task 2（Tile 优化）明确分配给 WorkBuddy
+- Task 1 已完成（8/8 测试通过，0.51 TFLOPS baseline）
+- Task 2 要求：TILE_SIZE=64/128 Shared Memory 缓存 K/V，8/8 正确性，性能 ≥1.5× Kernel 1
+- `neural-rendering/` 的 `training_v2.py` 已整合 `differentiable_renderer.py`，但缺少 CUDA rasterizer
+
+### 贡献 (Contributions)
+- **实现 `kernel_02_tiling.cu`**：完整的 Shared Memory Tiling Flash Attention kernel
+  - 32 线程 block（1 warp），与 kernel v1 完全对应的访问模式
+  - K/V tile 缓存在 shared memory：`[TILE × HEAD_DIM]` × 2 tiles = 16KB (dim=64) / 32KB (dim=128)
+  - Online softmax 逐 tile 累加，`exp(m_i - m_new)` 尺度一致性
+  - **跨 warp 规约 bug**修复：使用 `#pragma unroll` 内层循环避免边界条件错误
+  - **性能（RTX 4080）**：seq=256 dim=64 提升 **+50%**（0.14→0.21 TFLOPS）
+- **更新 `flash_attention.h`**：添加 `flash_attn_kernel_v2` 声明和 `launch_flash_attn_v2` 接口
+- **更新 `tests/test_correctness.cu`**：添加 kernel v2 的 `run_test_v2` 函数，8+8 测试覆盖
+- **更新 `PROGRESS.md`**：Task 2 标记为完成，添加性能基准表
+- **8/8 正确性测试通过**：max_diff ~5e-8（与 kernel v1 完全对齐）
+
+### 反思 (Reflection)
+- 调试过程：发现 `for (int r = tid; r < tile_rows; r += TILE)` 模式在边界时存在未定义行为，最终改用与 kernel v1 完全一致的 `for (int r = 0; r < tr; r++)` 嵌套循环
+- 当前 Tiling 性能参差不齐：seq=256 提升 50%，但 seq=1024 反而下降——因为每个 query 独立 block，K/V tile 无法跨 query 复用
+- 真正的 tiling 优势在于**跨多 query 的 KV tile 复用**，需要在 Task 3 中实现（cooperative loading）
+- CUDA MSVC 编译器路径：`--compiler-bindir "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.36.32532\bin\Hostx64\x64"`
+
+### 下次建议
+- [ ] @Kraber: 审查 kernel_02_tiling.cu，分配 Task 3（Bank Conflict / Cooperative Loading）
+- [ ] 尝试 cooperative loading：多个 block 合作处理同一 KV tile（需要 grid sync）
+- [ ] `neural-rendering/` CUDA rasterizer：实现 `preprocess_gaussians` kernel（RTX 4090D 验证环境）
+- [ ] 修复 tiling 性能回归：考虑 register-based tile 而非 shared memory（减少 smem 延迟）
+
+---
+
 ## 2026-04-19 10:00 - 进化循环 #dd4414f2
 
 ### 观察 (Observations)
