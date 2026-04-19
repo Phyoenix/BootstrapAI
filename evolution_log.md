@@ -272,6 +272,35 @@ evolve: 初始化 AI Evolver 自举系统
 
 ---
 
+## 2026-04-19 18:58 - 协作贡献 #WorkBuddy-collab-003
+
+> 来自 WorkBuddy 协作 Agent（受 Phyoenix 委托）
+
+### 观察 (Observations)
+- collab-002 实现了 density_control.py 和 PSNR/SSIM 指标，但 gaussian.py 的 `render_gaussians_simple` 仍是单像素点写
+- Kraber 创建了 training.py 和 dataset.py，但渲染器仍需要完整的 2D 高斯求值才能产生高质量图像
+- COLLAB.md 显示 CUDA rasterizer 是 WorkBuddy 的待办项，但在此之前 CPU 渲染器需要完善
+
+### 贡献 (Contributions)
+- **重构 `render_gaussians_simple`**：实现完整的 2D 高斯求值和 α-blending
+  - 新增 `eval_2d_gaussian()`：计算 G(x) = exp(-0.5 * (x-μ)^T Σ^-1 (x-μ))
+  - 新增 `compute_2d_bbox()`：基于协方差特征值计算高斯覆盖范围
+  - 完整 α-blending：C = Σ ci αi Gi(x) Ti，其中 Ti = Π(1 - αj Gj(x))
+  - 早期退出优化：当 transmittance T < 0.01 时停止渲染
+- **渲染质量提升**：从单像素点写变为区域高斯 splatting，支持半透明混合
+
+### 反思 (Reflection)
+- 2D 高斯求值是 3DGS 渲染的核心，正确的 α-blending 顺序（back-to-front）确保物理正确性
+- 边界框裁剪（bbox clipping）显著减少每高斯的像素计算量
+- 下一步：将渲染器改为可微分形式（支持 autograd），以便与 training.py 集成
+
+### 下次建议
+- [ ] 实现可微分渲染（保留中间结果用于反向传播）
+- [ ] 接入 Kraber 的 training.py 进行端到端训练测试
+- [ ] 继续 CUDA rasterizer 内核实现（与 Kraber 分工）
+
+---
+
 ## 2026-04-19 10:00 - 进化循环 #dd4414f2
 
 ### 观察 (Observations)

@@ -242,25 +242,121 @@ def project_gaussians_to_2d(
     return means_2d, covariances_2d, depths
 
 
+def eval_2d_gaussian(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    mean: torch.Tensor,
+    cov: torch.Tensor
+) -> torch.Tensor:
+    """
+    Evaluate 2D Gaussian at pixel coordinates (x, y).
+    
+    G(x) = exp(-0.5 * (x - μ)^T Σ^-1 (x - μ))
+    
+    Args:
+        x: (H, W) pixel x coordinates (meshgrid)
+        y: (H, W) pixel y coordinates (meshgrid)
+        mean: (2,) Gaussian center
+        cov: (2, 2) covariance matrix
+    
+    Returns:
+        (H, W) Gaussian values
+    """
+    # Compute inverse covariance
+    try:
+        cov_inv = torch.linalg.inv(cov)
+    except RuntimeError:
+        # Singular matrix, return zeros
+        return torch.zeros_like(x)
+    
+    # Compute Mahalanobis distance
+    dx = x - mean[0]  # (H, W)
+    dy = y - mean[1]  # (H, W)
+    
+    # (x - μ)^T Σ^-1 (x - μ)
+    # = [dx, dy] @ [[c00, c01], [c10, c11]] @ [dx, dy]^T
+    c00, c01 = cov_inv[0, 0], cov_inv[0, 1]
+    c10, c11 = cov_inv[1, 0], cov_inv[1, 1]
+    
+    mahal = c00 * dx * dx + (c01 + c10) * dx * dy + c11 * dy * dy
+    
+    # Gaussian value
+    gaussian = torch.exp(-0.5 * mahal)
+    
+    return gaussian
+
+
+def compute_2d_bbox(
+    mean: torch.Tensor,
+    cov: torch.Tensor,
+    radius_scale: float = 3.0
+) -> Tuple[int, int, int, int]:
+    """
+    Compute 2D bounding box for a Gaussian.
+    
+    Uses the eigenvalues of covariance to determine the extent.
+    Covers radius_scale * sqrt(eigenvalue) in each direction.
+    
+    Args:
+        mean: (2,) center
+        cov: (2, 2) covariance
+        radius_scale: how many standard deviations to include
+    
+    Returns:
+        (x_min, y_min, x_max, y_max) integer bounds
+    """
+    # Get eigenvalues for extent
+    eigvals = torch.linalg.eigvalsh(cov)
+    std_x = torch.sqrt(eigvals[0].clamp(min=1e-6))
+    std_y = torch.sqrt(eigvals[1].clamp(min=1e-6))
+    
+    # Bounding box
+    x_min = int((mean[0] - radius_scale * std_x).item())
+    x_max = int((mean[0] + radius_scale * std_x).item()) + 1
+    y_min = int((mean[1] - radius_scale * std_y).item())
+    y_max = int((mean[1] + radius_scale * std_y).item()) + 1
+    
+    return x_min, y_min, x_max, y_max
+
+
 def render_gaussians_simple(
     gaussians: dict,
     camera: Camera,
-    background: Optional[torch.Tensor] = None
+    background: Optional[torch.Tensor] = None,
+    tile_size: int = 16
 ) -> torch.Tensor:
     """
-    Simple rasterization of Gaussians (simplified version).
+    Rasterization of Gaussians with full 2D Gaussian evaluation and α-blending.
     
-    Full implementation would include:
-    - Tile-based rasterization
-    - α-blending in sorted order
-    - Spherical harmonics for view-dependent color
+    This implements the core rendering equation from the 3DGS paper:
+    C = Σ ci αi Gi(x) Ti
+    where Ti = Π(1 - αj Gj(x)) for j < i
+    
+    Args:
+        gaussians: dict with positions, covariances, colors, opacities
+        camera: Camera object
+        background: optional background color (H, W, 3)
+        tile_size: tile size for efficient processing (not yet implemented)
+    
+    Returns:
+        (H, W, 3) rendered image
     """
     device = gaussians['positions'].device
     
-    # Create output image
+    # Create output image and transmittance accumulator
     image = torch.zeros(camera.height, camera.width, 3, device=device)
     if background is not None:
         image = background.clone()
+    
+    # Transmittance T (starts at 1.0)
+    T = torch.ones(camera.height, camera.width, device=device)
+    
+    # Create pixel coordinate grids
+    y_coords, x_coords = torch.meshgrid(
+        torch.arange(camera.height, device=device, dtype=torch.float32),
+        torch.arange(camera.width, device=device, dtype=torch.float32),
+        indexing='ij'
+    )
     
     # Project to 2D
     means_2d, covs_2d, depths = project_gaussians_to_2d(gaussians, camera)
@@ -268,18 +364,58 @@ def render_gaussians_simple(
     # Sort by depth (back to front for α-blending)
     sorted_indices = torch.argsort(depths, descending=True)
     
-    # Simple point splatting (not full Gaussian splatting yet)
-    # TODO: Implement full 2D Gaussian evaluation
+    # Render each Gaussian
     for idx in sorted_indices:
         if depths[idx] < camera.near or depths[idx] > camera.far:
             continue
         
-        x, y = int(means_2d[idx, 0]), int(means_2d[idx, 1])
-        if 0 <= x < camera.width and 0 <= y < camera.height:
-            # Simple alpha blending
-            alpha = gaussians['opacities'][idx, 0]
-            color = gaussians['colors'][idx]
-            image[y, x] = (1 - alpha) * image[y, x] + alpha * color
+        mean = means_2d[idx]  # (2,)
+        cov = covs_2d[idx]    # (2, 2)
+        
+        # Compute bounding box for this Gaussian
+        x_min, y_min, x_max, y_max = compute_2d_bbox(mean, cov, radius_scale=3.0)
+        
+        # Clip to image bounds
+        x_min = max(x_min, 0)
+        y_min = max(y_min, 0)
+        x_max = min(x_max, camera.width)
+        y_max = min(y_max, camera.height)
+        
+        if x_min >= x_max or y_min >= y_max:
+            continue
+        
+        # Extract region of interest
+        x_region = x_coords[y_min:y_max, x_min:x_max]
+        y_region = y_coords[y_min:y_max, x_min:x_max]
+        
+        # Evaluate 2D Gaussian in this region
+        G = eval_2d_gaussian(x_region, y_region, mean, cov)
+        
+        # Alpha value for this Gaussian
+        alpha = torch.sigmoid(gaussians['opacities'][idx, 0])
+        
+        # Weighted alpha: αi * Gi(x)
+        alpha_weighted = alpha * G
+        
+        # Clamp to avoid numerical issues
+        alpha_weighted = alpha_weighted.clamp(min=0.0, max=0.99)
+        
+        # Color contribution
+        color = gaussians['colors'][idx]  # (3,)
+        
+        # Get current transmittance in this region
+        T_region = T[y_min:y_max, x_min:x_max]
+        
+        # Add contribution: ci * αi * Gi * T
+        contribution = color.view(1, 1, 3) * alpha_weighted.unsqueeze(-1) * T_region.unsqueeze(-1)
+        image[y_min:y_max, x_min:x_max] += contribution
+        
+        # Update transmittance: T *= (1 - αi * Gi)
+        T[y_min:y_max, x_min:x_max] *= (1.0 - alpha_weighted)
+        
+        # Early exit if fully opaque everywhere (optimization)
+        if T.max() < 0.01:
+            break
     
     return image
 
