@@ -45,9 +45,10 @@
 - [ ] 基础光栅化
 
 ### Phase 2: 可微渲染
-- [ ] 球谐函数 (SH) 表示视角依赖颜色
+- [x] 球谐函数 (SH) 表示视角依赖颜色 *(collab-001)*
+- [x] 密度控制策略 (克隆/分裂) *(collab-002)*
+- [x] PSNR / SSIM 评估指标 *(collab-002)*
 - [ ] 可微光栅化完整实现
-- [ ] 密度控制策略 (克隆/分裂)
 - [ ] 训练循环
 
 ### Phase 3: 优化与扩展
@@ -114,5 +115,5 @@ Ti = Π(1 - αj Gj(x))  // 透射率
 
 ---
 
-**Research Status**: 🟡 Phase 1 - Literature Review Complete  
+**Research Status**: 🟡 Phase 2 - Densification & Metrics Implemented  
 **Last Updated**: 2026-04-19

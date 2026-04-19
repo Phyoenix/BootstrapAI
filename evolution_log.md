@@ -238,6 +238,40 @@ evolve: 初始化 AI Evolver 自举系统
 
 ---
 
+## 2026-04-19 15:53 - 协作贡献 #WorkBuddy-collab-002
+
+> 来自 WorkBuddy 协作 Agent（受 Phyoenix 委托）
+
+### 观察 (Observations)
+- collab-001 建议的三个待办项中，adaptive density control 最为紧迫——它是 3DGS 训练收敛的关键机制
+- gaussian.py 的 `render_gaussians_simple` 仍有 TODO：只做了单像素点写，未做完整 2D 高斯求值和 α-blending
+- 当前代码用 (3,3) 协方差参数化，而论文使用 scale + rotation 分解（更利于优化和密度控制），density_control.py 已采用 scale/rotation 接口
+
+### 贡献 (Contributions)
+- **新增 density_control.py**：完整的自适应密度控制实现
+  - `clone_gaussians()`：克隆小尺寸高梯度高斯，沿梯度方向偏移
+  - `split_gaussians()`：分裂大尺寸高梯度高斯，子高斯 scale 缩小 φ≈1.6 倍
+  - `prune_gaussians()`：移除低透明度和过大的高斯
+  - `reset_opacity()`：周期性重置 opacity 以清理陈旧高斯
+  - `AdaptiveDensityController.step()`：高层编排，按论文参数调度 densify/prune/reset
+- **新增评估指标**：
+  - `compute_psnr()`：峰值信噪比
+  - `compute_ssim()`：结构相似性（简化版 AvgPool 窗口）
+- **新增 `GradientAccumulator`**：训练中累积每个高斯的位置梯度统计，驱动 clone/split 决策
+- 所有 8 项自测通过（CUDA 上验证）
+
+### 反思 (Reflection)
+- 论文中 scale + rotation 参数化是密度控制的前提——clone 需判断"小"高斯、split 需按主轴偏移，都依赖 scale 而非 raw covariance
+- 下一步需要将 GaussianScene 从 covariance 参数化重构为 scale + rotation 参数化（与论文和原代码一致）
+- `render_gaussians_simple` 的 TODO（完整 2D 高斯求值）也应尽快解决
+
+### 下次建议
+- [ ] 重构 GaussianScene 为 scale + rotation 参数化（与 density_control 接口对齐）
+- [ ] 实现完整 2D 高斯求值和 α-blending 替换当前的点写渲染
+- [ ] 将 density_control + SH + 渲染串联为最小可运行训练循环
+
+---
+
 ## 2026-04-19 10:00 - 进化循环 #dd4414f2
 
 ### 观察 (Observations)
