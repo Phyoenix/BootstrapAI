@@ -8,16 +8,19 @@
 > - If a conflict appears, prefer manual merge and notify user only if ambiguous.
 > - Respect lock files (`.lock`, `.sync-in-progress`) that WorkBuddy may create.
 >
-> **Division of labor** (updated 2026-04-19 18:05):
+> **Division of labor** (updated 2026-04-19 19:50):
 > | Area | Lead | Status | Notes |
 > |------|------|--------|-------|
 > | Neural Rendering core (covariance, projection) | Kraber | ✅ Done | `gaussian_numpy.py` verified |
 > | Spherical Harmonics | WorkBuddy | ✅ Done | `spherical_harmonics.py` e3c98f6 |
 > | Adaptive Density Control | WorkBuddy | ✅ Done | `density_control.py` bf9c215 |
 > | PSNR/SSIM Metrics | WorkBuddy | ✅ Done | In `density_control.py` |
-> | CUDA Rasterization | WorkBuddy | 🟡 Assigned | `cuda_rasterizer.py` skeleton by Kraber, kernels by WorkBuddy |
+> | 2D Gaussian eval + α-blending (CPU) | WorkBuddy | ✅ Done | `gaussian.py` render_gaussians_simple 8fa9f5c |
+> | Differentiable Renderer | WorkBuddy | ✅ Done | `differentiable_renderer.py` — autograd-compatible |
+> | Differentiable Loss (L1+SSIM) | WorkBuddy | ✅ Done | In `differentiable_renderer.py` |
+> | CUDA Rasterization | WorkBuddy | 🟡 Next | After differentiable renderer is validated in training |
 > | Dataset loaders | Kraber | ✅ Done | `dataset.py` with Mock + NeRF support |
-> | Training loop | Kraber | 🟡 In Progress | `training.py` integrating WorkBuddy's components |
+> | Training loop | Kraber | 🟡 In Progress | `training.py` — needs differentiable renderer integration |
 > | ComputeBench HPC tool | Kraber | ✅ Done | Separate track, low priority |
 >
 > **Communication protocol** (updated by user 2026-04-19 18:03):
@@ -55,3 +58,14 @@
 - **Created CUDA skeleton** (`cuda_rasterizer.py`) with clear TODOs for WorkBuddy
 - **Current state**: Phase 2 complete (SH), Phase 3 partially complete (density control), need CUDA for performance
 - **Next for Kraber**: Complete training loop integration; wait for WorkBuddy's CUDA kernels
+
+---
+
+2026-04-19 19:50 Asia/Shanghai — WorkBuddy (strategy update)
+- **Delivered differentiable renderer** (`differentiable_renderer.py`): the KEY missing piece for training
+- This solves Kraber's pain point: training.py couldn't backpropagate through NumPy rendering
+- **All gradients verified** on CUDA (RTX 4080): positions, scales, rotations, opacities, colors
+- **End-to-end training step works**: 3 steps, loss 0.573→0.550
+- **Strategy shift**: responding to user's request for high-frequency pull/push + commit message dialogue
+- **Next for WorkBuddy**: CUDA tile-based rasterizer (after Kraber integrates differentiable_renderer into training.py)
+- @Kraber: Use `from differentiable_renderer import create_render_step` in your training.py

@@ -301,6 +301,43 @@ evolve: 初始化 AI Evolver 自举系统
 
 ---
 
+## 2026-04-19 19:50 - 协作贡献 #WorkBuddy-collab-004
+
+> 来自 WorkBuddy 协作 Agent（受 Phyoenix 委托）
+
+### 观察 (Observations)
+- Kraber 在 cuda_rasterizer.py 中留了 TODO @WorkBuddy 邀请实现 CUDA kernel
+- 但更紧迫的问题是：training.py 使用 NumPy 渲染器（不可微分），导致**无法真正训练**
+- Kraber 的 GaussianModel 已采用 scale + rotation 参数化（与 density_control.py 对齐），但渲染管线未打通
+- 用户（TeNsOr）明确要求调整协作策略：高频 pull、小步 push、通过 commit message 对话
+
+### 贡献 (Contributions)
+- **新增 `differentiable_renderer.py`**：完整的 PyTorch autograd 可微分渲染管线
+  - `DifferentiableGaussianRenderer`：nn.Module，前向传播支持完整反向传播
+  - 协方差从 scale + rotation 计算（Σ = R diag(s²) Rᵀ），与 density_control 接口一致
+  - 3D→2D 投影：JW Σ Wᵀ Jᵀ（向量化实现，避免逐高斯循环）
+  - 不同iable α-blending：所有操作使用 out-of-place 避免破坏 autograd graph
+  - `DifferentiableLoss`：L1 + SSIM 组合损失（λ=0.2，论文标准）
+  - `create_render_step` 帮助函数：一行代码创建渲染器 + 损失函数
+- **在 CUDA (RTX 4080) 上验证**：
+  - 6 项测试全部通过
+  - 梯度流通到 positions / scales / rotations / opacities / colors 所有 5 组参数
+  - 端到端训练步骤：3 步 loss 从 0.573 → 0.550，梯度下降正常工作
+
+### 反思 (Reflection)
+- 可微分渲染器是打通训练流水线的关键瓶颈——之前 Kraber 的 training.py 只能计算 loss 但无法反向传播
+- 纯 PyTorch 实现比 CUDA kernel 慢（~5-20 fps vs ~100+ fps），但**立即可用于训练**
+- 协作策略调整：从"3 小时固定同步"改为"高频 pull + 小步 push + commit message 对话"更高效
+- Kraber 无法测试 CUDA 代码，我的 RTX 4090D 环境是真正的差异化优势
+
+### 下次建议
+- [ ] @Kraber：将 differentiable_renderer 集成到 training.py 的 SimpleTrainer 中
+- [ ] 实现 CUDA tile-based rasterizer（在 differentiable_renderer 基础上优化）
+- [ ] 接入 density_control + SH + differentiable_renderer 的完整训练循环
+- [ ] 用 MockDataset 跑一个 mini training session 验证端到端
+
+---
+
 ## 2026-04-19 10:00 - 进化循环 #dd4414f2
 
 ### 观察 (Observations)
