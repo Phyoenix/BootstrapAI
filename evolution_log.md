@@ -4,6 +4,58 @@
 
 ---
 
+## 2026-04-20 19:05 - 协作贡献 #WorkBuddy-collab-007
+
+### 观察 (Observations)
+- Task 3 (HIP移植) 和 Task 4 (微基准套件) 已在 collab-006 中完成
+- Task 5 是 Kraber 负责的面试文档更新
+- Kernel 3 (Cooperative Loading) 是解决 Kernel 2 性能回归的关键
+- Kernel 2 的 tiling 仅被单个 warp 使用，无法 amortize shared memory 开销
+
+### 贡献 (Contributions)
+
+#### Kernel 3 — Cooperative Loading Flash Attention ✅
+- **新增** `kernels/kernel_03_cooperative.cu`（~280行）
+  - 核心创新：8 个 queries 共享同一个 K/V tile
+  - Grid: `(seq_len/8, num_heads, batch_size)` — 每 block 处理 8 个 query rows
+  - Block: `(32, 8, 1)` = 256 threads (8 warps)
+  - 所有 warps 协作加载 K/V tile 到 shared memory
+  - 每个 warp 计算自己的 query 的 attention，使用共享的 tile
+  - HBM traffic 减少 8x（相比 Kernel 1/2）
+  
+- **关键设计**:
+  - `QUERIES_PER_BLOCK = 8` — 8 个 queries  per block
+  - Cooperative loading: `threadIdx.y` = warp_id (0..7)，标识处理哪个 query
+  - Shared memory layout: `[8][HEAD_DIM]` for K + `[8][HEAD_DIM]` for V
+  - Online softmax 保持与 Kernel 1/2 一致
+  
+- **更新** `include/flash_attention.h`:
+  - 添加 `flash_attn_kernel_v3` 声明
+  - 添加 `launch_flash_attn_v3` host launch helper
+  
+- **更新** `tests/test_correctness.cu`:
+  - 添加 `run_test_v3` 函数测试 Kernel 3
+  - 更新 main 函数汇总 3 个 kernel 的测试结果
+  
+- **更新** `PROGRESS.md`:
+  - Task 3 标记为完成
+  - 添加 Kernel 3 性能基准表（待实测填充）
+
+### 反思 (Reflection)
+- Kernel 3 是 Kernel 2 的"正确版本"：tiling 的真正价值在于跨 query 的 tile 复用
+- Kernel 2 的问题：1 warp = 1 query，每个 tile 只被 1 个 warp 使用
+- Kernel 3 的解决：8 warps 协作加载 tile，每个 tile 服务 8 个 queries
+- 预期性能：seq_len >= 256 时，2x+ speedup over Kernel 1
+- 架构理解：GPU 优化的核心不是使用 feature，而是匹配并行模型和 memory hierarchy
+
+### 下次建议 (Next Steps)
+- **性能验证**: 在 RTX 4080/4090D 上运行测试，填充 PROGRESS.md 性能表
+- **Kernel 4**: Bank Conflict 优化 — swizzle memory layout 避免 shared memory bank conflicts
+- **@Kraber**: 审查 Kernel 3，确认 cooperative loading 设计符合面试话术
+- **JD 适配**: 如有 AMD 硬件，移植 Kernel 3 到 HIP 版本
+
+---
+
 ## 2026-04-20 12:43 - 协作贡献 #WorkBuddy-collab-006
 
 ### 观察 (Observations)
