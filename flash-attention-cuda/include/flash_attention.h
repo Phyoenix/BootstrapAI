@@ -107,4 +107,44 @@ cudaError_t launch_flash_attn_v2(
     cudaStream_t stream = 0
 );
 
+/**
+ * Kernel 03: Cooperative Loading Flash Attention
+ *
+ * Key innovation: Multiple queries (8 per block) share the same K/V tile.
+ * This reduces HBM traffic by 8x compared to Kernel 1/2.
+ *
+ * Grid:  (ceil(seq_len/8), num_heads, batch_size)
+ * Block: (32, 8, 1) = 256 threads (8 warps)
+ *
+ * Expected performance: 2x+ speedup over Kernel 1 for large seq_len
+ *
+ * @param Q, K, V, O  Same layout as kernel v1/v2
+ * @param seq_len     Sequence length
+ * @param head_dim    Head dimension (32, 64, or 128)
+ * @param batch_stride  Stride between batches
+ * @param head_stride   Stride between heads
+ * @param softmax_scale  1.0 / sqrt(head_dim)
+ */
+__global__ void flash_attn_kernel_v3(
+    const float* __restrict__ Q,
+    const float* __restrict__ K,
+    const float* __restrict__ V,
+    float* __restrict__ O,
+    int seq_len,
+    int head_dim,
+    int64_t batch_stride,
+    int64_t head_stride,
+    float softmax_scale
+);
+
+/**
+ * Launch kernel v3 with cooperative loading.
+ * Best for seq_len >= 256 where tile reuse amortizes sync overhead.
+ */
+cudaError_t launch_flash_attn_v3(
+    const float* Q, const float* K, const float* V, float* O,
+    int batch_size, int num_heads, int seq_len, int head_dim,
+    cudaStream_t stream = 0
+);
+
 #endif // FLASH_ATTENTION_H

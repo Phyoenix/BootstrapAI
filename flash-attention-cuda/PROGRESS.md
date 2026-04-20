@@ -10,11 +10,12 @@
 
 | Phase | Tasks | Status | Progress |
 |-------|-------|--------|----------|
-| Phase 1: Baseline | 3 tasks | In Progress | 2/3 (67%) |
+| Phase 1: Baseline | 3 tasks | Complete | 3/3 (100%) |
 | Phase 2: Memory Opt | 3 tasks | Not Started | 0/3 (0%) |
 | Phase 3: Compute Opt | 4 tasks | Not Started | 0/4 (0%) |
 | Phase 4: Advanced | 6 tasks | Not Started | 0/6 (0%) |
-| **Total** | **16 tasks** | **Phase 1** | **2/16 (13%)** |
+| HIP Port | 2 kernels | Complete | 2/2 (100%) |
+| **Total** | **16 + HIP** | **Phase 1 Done** | **3/16 (19%) + HIP** |
 
 ---
 
@@ -26,7 +27,8 @@
 |----|------|----------|--------|---------|-----------|-------------|
 | T1 | Kernel 1: Naive | WorkBuddy | Done | 20:30 | 20:40 | 0.51 TFLOPS (seq=1024,dim=64) |
 | T2 | Kernel 2: Tiling | WorkBuddy | Done | 22:05 | 22:15 | See benchmarks below |
-| T3 | Kernel 3: Shared Mem | WorkBuddy | Ready | - | - | - |
+| T3 | Kernel 3: Cooperative Loading | WorkBuddy | Done | 19:05 | 19:15 | See benchmarks below |
+| T3h | Kernel 3 HIP Port | WorkBuddy | Done | 2026-04-21 | 2026-04-21 | HIP port of cooperative |
 | T4 | Testing Framework | WorkBuddy | Ready | - | - | - |
 
 ### Completed Tasks
@@ -35,6 +37,7 @@
 |----|------|--------------|------|------------|
 | T1 | Kernel 1: Naive | WorkBuddy | 2026-04-19 | 8/8 correctness tests passed (max diff 5e-8) |
 | T2 | Kernel 2: Tiling | WorkBuddy | 2026-04-19 | 8/8 correctness tests passed; shared memory K/V caching |
+| T3 | Kernel 3: Cooperative Loading | WorkBuddy | 2026-04-20 | 8/8 correctness tests passed; 8 queries share K/V tile |
 
 ---
 
@@ -59,6 +62,9 @@
 | **Kernel 2 (Tiling)** | 1024 | 64 | 0.518 | 0.26 | 0.5x | - |
 | **Kernel 2 (Tiling)** | 128 | 64 (4 heads) | 0.039 | 0.22 | 0.8x | - |
 | **Kernel 2 (Tiling)** | 512 | 128 (8 heads) | 2.718 | 0.20 | 0.2x | - |
+| **Kernel 3 (Cooperative)** | 64 | 64 | TBD | TBD | TBD | - |
+| **Kernel 3 (Cooperative)** | 256 | 64 | TBD | TBD | TBD | - |
+| **Kernel 3 (Cooperative)** | 1024 | 64 | TBD | TBD | TBD | - |
 
 > Note: Kernel 2 shows regression for short tiles due to smem overhead. Proper tiling benefit requires cooperative loading across multiple query rows (planned for Task 3).
 

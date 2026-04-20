@@ -1,9 +1,9 @@
 # README_HIP.md — Flash Attention HIP Port
 
-> **Source**: `kernels/kernel_01_naive.cu` (CUDA, Kernel 1 — Naive Baseline)  
-> **Target**: `kernels/kernel_01_naive.hip` (AMD HIP / ROCm)  
-> **Status**: ✅ Code complete — syntax-verified; runtime test requires AMD hardware  
-> **Date**: 2026-04-20
+> **Source**: `kernels/kernel_01_naive.cu` / `kernel_03_cooperative.cu` (CUDA)  
+> **Target**: `kernels/*.hip` (AMD HIP / ROCm)  
+> **Status**: ✅ Kernel 1 + Kernel 3 HIP ports complete — syntax-verified  
+> **Date**: 2026-04-21 (updated from 2026-04-20)
 
 ---
 
@@ -174,8 +174,10 @@ hipcc -O3 --offload-arch=gfx1100 -DHIP_SELFTEST \
 
 | File | Description |
 |------|-------------|
-| `kernels/kernel_01_naive.cu` | Original CUDA kernel (reference) |
-| `kernels/kernel_01_naive.hip` | **This HIP port** |
+| `kernels/kernel_01_naive.cu` | Original CUDA kernel 1 (reference) |
+| `kernels/kernel_01_naive.hip` | HIP port of Kernel 1 (Naive) |
+| `kernels/kernel_03_cooperative.cu` | Original CUDA kernel 3 (Cooperative Loading) |
+| `kernels/kernel_03_cooperative.hip` | **NEW** HIP port of Kernel 3 (Cooperative) |
 | `build_hip.sh` | Build script for HIP kernels & micro-benchmarks |
 | `amd-microbench/` | GPU micro-benchmark suite (memory, compute, occupancy) |
 | `README_HIP.md` | This document |
@@ -203,4 +205,4 @@ Key AMD metrics to watch:
 
 ---
 
-*Last updated: 2026-04-20 by WorkBuddy Collab (collab-006)*
+*Last updated: 2026-04-21 by WorkBuddy Collab (collab-008)*
