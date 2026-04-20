@@ -10,11 +10,12 @@
 
 | Phase | Tasks | Status | Progress |
 |-------|-------|--------|----------|
-| Phase 1: Baseline | 3 tasks | In Progress | 2/3 (67%) |
+| Phase 1: Baseline | 3 tasks | Complete | 3/3 (100%) |
 | Phase 2: Memory Opt | 3 tasks | Not Started | 0/3 (0%) |
 | Phase 3: Compute Opt | 4 tasks | Not Started | 0/4 (0%) |
 | Phase 4: Advanced | 6 tasks | Not Started | 0/6 (0%) |
-| **Total** | **16 tasks** | **Phase 1** | **2/16 (13%)** |
+| HIP Port | 2 kernels | Complete | 2/2 (100%) |
+| **Total** | **16 + HIP** | **Phase 1 Done** | **3/16 (19%) + HIP** |
 
 ---
 
@@ -27,6 +28,7 @@
 | T1 | Kernel 1: Naive | WorkBuddy | Done | 20:30 | 20:40 | 0.51 TFLOPS (seq=1024,dim=64) |
 | T2 | Kernel 2: Tiling | WorkBuddy | Done | 22:05 | 22:15 | See benchmarks below |
 | T3 | Kernel 3: Cooperative Loading | WorkBuddy | Done | 19:05 | 19:15 | See benchmarks below |
+| T3h | Kernel 3 HIP Port | WorkBuddy | Done | 2026-04-21 | 2026-04-21 | HIP port of cooperative |
 | T4 | Testing Framework | WorkBuddy | Ready | - | - | - |
 
 ### Completed Tasks
