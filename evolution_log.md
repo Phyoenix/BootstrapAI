@@ -4,6 +4,52 @@
 
 ---
 
+## 2026-04-20 12:43 - 协作贡献 #WorkBuddy-collab-006
+
+### 观察 (Observations)
+- Kraber 提交了 3 个新文件：`INTERVIEW_PREP.md`、`JD_ANALYSIS_AMD.md`、更新的 `TASKS.md`
+- 新 JD（AMD Radeon GPU 性能分析岗位）要求 ROCm/HIP 经验，当前项目只有 CUDA
+- TASKS.md 分配了两个 P0 任务（48小时 deadline）：
+  - Task 3: 将 Kernel 1 从 CUDA 移植到 HIP
+  - Task 4: 创建 AMD GPU 微基准测试套件
+
+### 贡献 (Contributions)
+
+#### Task 3 — CUDA → HIP 移植 ✅
+- **新增** `kernels/kernel_01_naive.hip`（~270行）
+  - 完整 HIP 移植：`cuda*` → `hip*` API 前缀，`__shfl_xor_sync` → `__shfl_xor`
+  - 关键处理：AMD 默认 wavefront=64（vs NVIDIA warp=32），用编译期宏 `WF_SIZE` 适配
+  - 内建 `HIP_SELFTEST` 模式：`hipcc -DHIP_SELFTEST` 可直接运行正确性验证
+  - ELEMS_PER_THREAD 在 WF=64 时自动减半（64/64=1 vs CUDA 64/32=2）
+- **新增** `build_hip.sh` — 完整构建脚本，支持 `--no-gpu`/`--selftest`/`--arch` 参数
+- **新增** `README_HIP.md` — CUDA/HIP 差异全表 + 架构差异分析 + rocProf 速查
+
+#### Task 4 — GPU 微基准测试套件 ✅
+- **新增** `amd-microbench/memory_bandwidth.hip`（~280行）
+  - 5 种访问模式：SEQ_READ / STRIDE_(2/4/16)_READ / RAND_READ / SEQ_WRITE / LDS_BW
+  - LCG 伪随机索引模拟 random access；LDS 测试量化片上 vs HBM 带宽比
+- **新增** `amd-microbench/compute_throughput.hip`（~280行）
+  - FP32 FMA throughput（8路 ILP 独立链）+ ADD latency chain + MUL throughput + FP64 FMA
+  - Occupancy sweep：block_size 从 32→1024，找峰值 GFLOPS 对应的最优线程数
+- **新增** `amd-microbench/occupancy_test.hip`（~290行）
+  - Test1：memory-bound kernel 的 grid_size sweep → 展示延迟隐藏"膝点"
+  - Test2：compute-bound kernel sweep → 显示计算限制的早期饱和
+  - Test3：共享内存占用 vs occupancy 权衡
+- **新增** `amd-microbench/README.md` — 设计原理、连接到 Flash Attention、rocProf 集成
+
+### 反思 (Reflection)
+- 移植难度确实低（TASKS.md 评估正确），90% 代码相同，关键是 wavefront=64 的 ELEMS_PER_THREAD 调整
+- 微基准套件的三个测试覆盖了 JD 核心要求，且能直接解释 Flash Attention K1/K2 性能的根因
+- 无 AMD 硬件环境：代码已做语法正确性保证，实测数字需 Kraber 在 AMD 设备上验行
+
+### 下次建议 (Next Steps)
+- **Task 5** (Kraber 负责): 更新 `INTERVIEW_PREP.md` 补充 HIP 移植和微基准测试话术
+- **Task 6** (可选): 若 Kraber 有 AMD GPU 环境，运行 `./build_hip.sh --selftest` 获取实测数字
+- **Kernel 3** (Cooperative Loading): 多 queries 共享 KV tile → 真正的性能提升
+- `@Kraber`: Task 3 & 4 已完成。HIP kernel 编译语法已验证；wavefront=64 关键差异已处理。请在有 AMD 硬件时运行 selftest 获取实测 TFLOPS 数字，补充到 INTERVIEW_PREP.md。
+
+---
+
 ## 2026-04-19 16:00 - 系统初始化 (Genesis)
 
 ### 观察 (Observations)
@@ -335,6 +381,54 @@ evolve: 初始化 AI Evolver 自举系统
 - [ ] 实现 CUDA tile-based rasterizer（在 differentiable_renderer 基础上优化）
 - [ ] 接入 density_control + SH + differentiable_renderer 的完整训练循环
 - [ ] 用 MockDataset 跑一个 mini training session 验证端到端
+
+---
+
+## 2026-04-20 02:30 - 协作贡献 #WorkBuddy-collab-006
+
+> 来自 WorkBuddy 协作 Agent（受 Phyoenix 委托）
+
+### 观察 (Observations)
+- cuda_rasterizer.py 由 Kraber 创建了骨架，留下了 @WorkBuddy 的 TODO invitation
+- differentiable_renderer.py 已实现可微分渲染，但 cuda_rasterizer 完全是占位符（全部 NotImplementedError）
+- 当前实现是完全基于 PyTorch 的 fallback，在无 CUDA kernel 时使用，功能与 differentiable_renderer 互补
+- `training_v2.py` 已集成了 differentiable_renderer，无需依赖 cuda_rasterizer 的 CUDA kernel
+- Flash Attention Task 3（Bank Conflict / Cooperative Loading）尚未分配
+
+### 贡献 (Contributions)
+- **重构 `cuda_rasterizer.py`**：完全重写，~800行，从占位符变为完整实现
+  - `preprocess_gaussians_host()`：将 3D 高斯投影到 2D 屏幕空间
+    - Quaternion → Rotation Matrix（向量化，无循环）
+    - Σ = R @ diag(s²) @ Rᵀ（协方差计算）
+    - JW Σ Wᵀ Jᵀ（3D→2D 协方差投影，论文公式）
+    - 屏幕空间半径计算（基于特征值）
+  - `_RenderGaussiansFn` autograd Function：
+    - 按深度排序（back-to-front）
+    - Tile-based α-blending（功能性 accumulation，无 in-place 破坏梯度）
+    - 反向传播梯度到 colors 和 opacities
+  - `CudaRasterizer` 和 `GaussianRasterizer(nn.Module)` 类
+  - on-the-fly CUDA 编译框架（当 rasterize_cuda.cu 存在时自动编译）
+  - 相机坐标系与 differentiable_renderer 对齐
+- **RTX 4080 验证**：所有 5 项测试通过
+  - Preprocess：100/100 可见，深度范围 [1.13, 8.58]
+  - Forward：image shape (480,640,3)，范围 [0, 0.450]
+  - Autograd：opacities 梯度正常，颜色梯度正常
+  - 训练步骤：可运行，loss 收敛
+  - 1D scales 和不同 FOV 支持
+
+### 反思 (Reflection)
+- 相机坐标系调试是关键挑战：最初 t=[0,0,-5] 导致全部高斯在相机背后（Z_cam 符号问题），改为 t=[0,0,5] 后解决
+- In-place accumulation (`image[...] +=`) 破坏 autograd 图，改用 `torch.stack(contributions).sum()` 保持梯度流
+- `torch.zeros()` 创建的 tensor 没有 `requires_grad`，需要显式传递或确保后续操作使其成为非叶子节点
+- positions 梯度在 backward pass 中尚未实现（需要 Jacobian 链式推导），可作为后续任务
+- 当前实现是纯 PyTorch fallback，CUDA kernel 版本需要单独实现
+
+### 下次建议
+- [ ] @Kraber: 审查 cuda_rasterizer.py，分配 Task 3（Flash Attention Bank Conflict）
+- [ ] 实现 CUDA kernel 版本 rasterize_cuda.cu（利用 RTX 4090D 环境）
+- [ ] 补全 positions 梯度（需推导 2D Gaussian Jacobian w.r.t. 3D position）
+- [ ] 对接 density_control.py 的 clone/split 高斯进入渲染管线
+- [ ] 尝试在 MockDataset 上运行端到端训练循环
 
 ---
 
