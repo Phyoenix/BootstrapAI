@@ -2,11 +2,12 @@
  * Test Correctness for Flash Attention CUDA Kernels
  *
  * Compares CUDA kernel output against CPU reference implementation.
- * Tests both kernel v1 (naive) and kernel v2 (tiling).
+ * Tests kernel v1 (naive), v2 (tiling), v3 (cooperative), v4 (swizzle).
  *
  * Build:
  *   nvcc -O3 -arch=sm_89 -I../include test_correctness.cu \
  *     ../kernels/kernel_01_naive.cu ../kernels/kernel_02_tiling.cu \
+ *     ../kernels/kernel_03_cooperative.cu ../kernels/kernel_04_swizzle.cu \
  *     -o test_correctness -lcudart
  *
  * Run:
@@ -381,14 +382,90 @@ bool run_test_v3(const TestCase& tc) {
 }
 
 // ============================================================================
+// Kernel v4 (Swizzled Shared Memory / Bank-Conflict-Free) test runner
+// ============================================================================
+
+bool run_test_v4(const TestCase& tc) {
+    printf("\n  Testing: %s (batch=%d, heads=%d, seq=%d, dim=%d)\n",
+           tc.name.c_str(), tc.batch_size, tc.num_heads, tc.seq_len, tc.head_dim);
+
+    int64_t total_elements = (int64_t)tc.batch_size * tc.num_heads * tc.seq_len * tc.head_dim;
+    size_t bytes = total_elements * sizeof(float);
+
+    std::vector<float> h_Q(total_elements), h_K(total_elements), h_V(total_elements);
+    std::vector<float> h_O_cuda(total_elements), h_O_ref(total_elements);
+
+    init_random(h_Q.data(), total_elements, 42);
+    init_random(h_K.data(), total_elements, 123);
+    init_random(h_V.data(), total_elements, 456);
+
+    standard_attention_cpu(
+        h_Q.data(), h_K.data(), h_V.data(), h_O_ref.data(),
+        tc.batch_size, tc.num_heads, tc.seq_len, tc.head_dim
+    );
+
+    float *d_Q, *d_K, *d_V, *d_O;
+    CUDA_CHECK(cudaMalloc(&d_Q, bytes));
+    CUDA_CHECK(cudaMalloc(&d_K, bytes));
+    CUDA_CHECK(cudaMalloc(&d_V, bytes));
+    CUDA_CHECK(cudaMalloc(&d_O, bytes));
+
+    CUDA_CHECK(cudaMemcpy(d_Q, h_Q.data(), bytes, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_K, h_K.data(), bytes, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_V, h_V.data(), bytes, cudaMemcpyHostToDevice));
+
+    CUDA_CHECK(launch_flash_attn_v4(
+        d_Q, d_K, d_V, d_O,
+        tc.batch_size, tc.num_heads, tc.seq_len, tc.head_dim
+    ));
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    CUDA_CHECK(cudaMemcpy(h_O_cuda.data(), d_O, bytes, cudaMemcpyDeviceToHost));
+
+    bool passed = compare_results(h_O_cuda.data(), h_O_ref.data(), total_elements);
+
+    // Benchmark
+    CudaTimer timer;
+    int num_warmup = 5;
+    int num_iters = 20;
+
+    for (int i = 0; i < num_warmup; i++) {
+        launch_flash_attn_v4(d_Q, d_K, d_V, d_O,
+                             tc.batch_size, tc.num_heads, tc.seq_len, tc.head_dim);
+    }
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    timer.begin();
+    for (int i = 0; i < num_iters; i++) {
+        launch_flash_attn_v4(d_Q, d_K, d_V, d_O,
+                             tc.batch_size, tc.num_heads, tc.seq_len, tc.head_dim);
+    }
+    float ms = timer.end() / num_iters;
+
+    double flops = compute_attention_flops(tc.batch_size, tc.num_heads, tc.seq_len, tc.head_dim);
+    double tflops = flops / (ms * 1e-3) / 1e12;
+
+    printf("    Time: %.3f ms\n", ms);
+    printf("    TFLOPS: %.2f\n", tflops);
+    printf("    Result: %s\n", passed ? "PASSED" : "FAILED");
+
+    CUDA_CHECK(cudaFree(d_Q));
+    CUDA_CHECK(cudaFree(d_K));
+    CUDA_CHECK(cudaFree(d_V));
+    CUDA_CHECK(cudaFree(d_O));
+
+    return passed;
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
 int main() {
     printf("============================================================\n");
     printf("Flash Attention Kernels - Correctness & Performance Test\n");
-    printf("Kernel v1: Naive (HBM)     |  Kernel v2: Tiling (Shared Mem)\n");
-    printf("Kernel v3: Cooperative Loading (8 queries/block)\n");
+    printf("Kernel v1: Naive (HBM)       |  Kernel v2: Tiling (Shared Mem)\n");
+    printf("Kernel v3: Cooperative (8q)  |  Kernel v4: Swizzle (Bank-CF-Free)\n");
     printf("============================================================\n");
 
     // Print GPU info
@@ -444,16 +521,26 @@ int main() {
         }
     }
 
+    printf("\n========== KERNEL V4 (Swizzled Shared Memory, Bank-Conflict-Free) ==========\n");
+    int passed_v4 = 0;
+    for (const auto& tc : tests) {
+        if (run_test_v4(tc)) {
+            passed_v4++;
+        }
+    }
+
     printf("\n============================================================\n");
-    printf("KERNEL V1 (Naive):              %d / %d tests passed\n", passed_v1, total);
-    printf("KERNEL V2 (Tiling):             %d / %d tests passed\n", passed_v2, total);
-    printf("KERNEL V3 (Cooperative Loading): %d / %d tests passed\n", passed_v3, total);
-    if (passed_v1 == total && passed_v2 == total && passed_v3 == total) {
-        printf("ALL TESTS PASSED (all 3 kernels)\n");
+    printf("KERNEL V1 (Naive):                   %d / %d tests passed\n", passed_v1, total);
+    printf("KERNEL V2 (Tiling):                  %d / %d tests passed\n", passed_v2, total);
+    printf("KERNEL V3 (Cooperative Loading):     %d / %d tests passed\n", passed_v3, total);
+    printf("KERNEL V4 (Swizzled, Bank-CF-Free):  %d / %d tests passed\n", passed_v4, total);
+    if (passed_v1 == total && passed_v2 == total && passed_v3 == total && passed_v4 == total) {
+        printf("ALL TESTS PASSED (all 4 kernels)\n");
     } else {
         printf("SOME TESTS FAILED\n");
     }
     printf("============================================================\n");
 
-    return (passed_v1 == total && passed_v2 == total && passed_v3 == total) ? 0 : 1;
+    return (passed_v1 == total && passed_v2 == total &&
+            passed_v3 == total && passed_v4 == total) ? 0 : 1;
 }

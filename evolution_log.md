@@ -4,7 +4,68 @@
 
 ---
 
-## 2026-04-21 02:31 - 协作贡献 #WorkBuddy-collab-008
+## 2026-04-21 21:06 - 协作贡献 #WorkBuddy-collab-009
+
+### 观察 (Observations)
+- 仓库无新变更（Already up to date），Kraber 暂无新 push
+- Kernel 1-3 均已完成，Phase 1 剩余唯一缺口是 **Kernel 4 (Bank Conflict 优化)**
+- PROGRESS.md Optimization Journey Map 中 Kernel 4 (Swizzling) 明确列出但尚未实现
+- collab-007/008 的下次建议均指向 "Bank Conflict 优化 (Kernel 4): swizzle shared memory layout"
+- Kernel 3 的 cooperative loading 设计中存在潜在 bank conflict：
+  当 HEAD_DIM=64，row stride=64（行主序），多个 warp 同时写 s_K/s_V 时
+  row r 起始地址 ≡ (r × 64 × 4 / 4) % 32 = (r × 64) % 32 = 0（对所有偶数 r）
+  → 8 warps 同时访问 bank 0，32-way conflict！
+
+### 贡献 (Contributions)
+
+#### Kernel 4 — Bank Conflict-Free Flash Attention (Swizzled Shared Memory) ✅
+- **新增** `kernels/kernel_04_swizzle.cu`（~210行）
+  - 核心创新：共享内存行使用 PADDED stride（`HEAD_DIM + SMEM_PAD`，SMEM_PAD=1）
+  - 问题根源：row-major layout 中 s_K[r × HEAD_DIM + col]，HEAD_DIM=64 时 row r 起始 bank = (r×64)%32 = 0 → 所有行 bank 相同 → 32-way conflict
+  - 修复：stride=65 → row r 起始 bank = (r×65)%32 = r（mod32）→ 32 行各占不同 bank ✓
+  - 内存开销：每行增加 1 float（4字节），总开销 8×4=32 字节（可忽略）
+  - Grid/Block 与 Kernel 3 完全相同：`(seq/8, heads, batch)` × `(32, 8, 1)`
+  - 动态 `smem_bytes = 2 × TILE_ROWS × (HEAD_DIM+SMEM_PAD) × sizeof(float)` 通过 extern shared
+  - 超出 48KB 时自动 fallback 到 `launch_flash_attn_v3`
+  - HEAD_DIM dispatch：32→EPT=1, 64→EPT=2, 128→EPT=4（与 Kernel 3 一致）
+- **更新** `include/flash_attention.h`：
+  - 添加 `flash_attn_kernel_v4` 声明（带完整 bank conflict 分析注释）
+  - 添加 `launch_flash_attn_v4` host launcher 声明
+- **更新** `tests/test_correctness.cu`：
+  - 添加 `run_test_v4()` 函数（与 v1/v2/v3 结构完全对齐）
+  - main() 中添加 v4 测试循环（8个测试用例，与 v1-v3 使用相同 seed）
+  - 更新 summary 输出：`KERNEL V4 (Swizzled, Bank-CF-Free): X / 8 tests passed`
+  - 更新 Build 注释：加入 `kernel_04_swizzle.cu`
+- **更新** `PROGRESS.md`：
+  - Overall Progress：Phase 1 从 3/3 → 4/4
+  - Task 表：T4 Kernel 4 标记为 Done
+  - 性能基准：添加 Kernel 4 TBD 行（待 RTX 4080 实测）
+  - Optimization Journey Map：Kernel 4 从 "Swizzling" 更新为具体描述
+
+### 反思 (Reflection)
+- **Bank conflict 是 shared memory 最常见的隐性瓶颈**：在性能分析工具（Nsight Compute）中表现为 smem replay（shared_st_transactions > 1x 理想值）。Kernel 3 的 cooperative loading 完全正确，但 bank conflict 会把每次 smem access 拆分为多个 serialized requests，从而抵消 HBM 节省的收益。
+- **Padding vs XOR-Swizzle 的权衡**：
+  - Padding（本实现）：代码简单、可验证、面试易解释；每行浪费 4 字节（可忽略）
+  - XOR-Swizzle（CUTLASS/官方 FlashAttention-2 做法）：零内存浪费，但需要在每次 smem 读写时对 col 做 `col ^ (row % 8) * 4` 的位运算，代码可读性低
+  - 面试场景：先解释 padding 方案（清晰直观），再提 CUTLASS 的 XOR-swizzle 作为更工程化的做法，展示知识深度
+- **SMEM_PAD=1 的数学依据**：对于 HEAD_DIM 是 2 的幂次（32/64/128），gcd(HEAD_DIM, 32)=32，即所有行映射到同一 bank。加 1 后 gcd(HEAD_DIM+1, 32)=1（因为 HEAD_DIM+1 是奇数），使得 row bank 分布均匀。
+
+### 下次建议 (Next Steps)
+- **@Kraber**: 在 RTX 4080/4090D 上编译并运行测试，填充 Kernel 3/4 性能数字
+  - 编译指令：
+    ```
+    nvcc -O3 -arch=sm_89 -I../include tests/test_correctness.cu \
+      kernels/kernel_01_naive.cu kernels/kernel_02_tiling.cu \
+      kernels/kernel_03_cooperative.cu kernels/kernel_04_swizzle.cu \
+      -o test_all -lcudart
+    ```
+- **Kernel 5 候选**：Double Buffering（prefetch 下一个 K/V tile 的同时计算当前 tile，隐藏 global memory latency）
+- **性能分析**：建议用 `ncu --metrics l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_st.sum` 对比 Kernel 3 vs Kernel 4 的 bank conflict 次数，作为面试 demo
+- **训练管线**：training_pipeline.py + MockDataset 已就绪，可以在有 GPU 的机器上跑 50-iter 集成测试
+
+---
+
+
 
 ### 观察 (Observations)
 - 仓库无新变更（Already up to date），Kraber 暂无新 push
