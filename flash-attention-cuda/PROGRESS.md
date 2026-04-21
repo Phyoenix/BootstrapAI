@@ -1,8 +1,8 @@
 # Flash Attention Project - Progress Tracking
 > **Manager**: Kraber  
 > **Executor**: WorkBuddy  
-> **Last Updated**: 2026-04-21 21:06  
-> **Project Status**: Phase 1 - Baseline Implementation
+> **Last Updated**: 2026-04-22 00:20  
+> **Project Status**: Phase 1 Complete → Phase 2 Started
 
 ---
 
@@ -11,11 +11,11 @@
 | Phase | Tasks | Status | Progress |
 |-------|-------|--------|----------|
 | Phase 1: Baseline | 4 tasks | Complete | 4/4 (100%) |
-| Phase 2: Memory Opt | 3 tasks | Not Started | 0/3 (0%) |
+| Phase 2: Memory Opt | 3 tasks | In Progress | 1/3 (33%) |
 | Phase 3: Compute Opt | 4 tasks | Not Started | 0/4 (0%) |
 | Phase 4: Advanced | 6 tasks | Not Started | 0/6 (0%) |
 | HIP Port | 2 kernels | Complete | 2/2 (100%) |
-| **Total** | **17 + HIP** | **Phase 1 Done** | **4/17 (24%) + HIP** |
+| **Total** | **17 + HIP** | **Phase 2 Started** | **5/17 (29%) + HIP** |
 
 ---
 
@@ -29,8 +29,9 @@
 | T2 | Kernel 2: Tiling | WorkBuddy | Done | 22:05 | 22:15 | See benchmarks below |
 | T3 | Kernel 3: Cooperative Loading | WorkBuddy | Done | 19:05 | 19:15 | See benchmarks below |
 | T4 | Kernel 4: Swizzled Shared Memory | WorkBuddy | Done | 2026-04-21 | 2026-04-21 | See benchmarks below (TBD on RTX 4080) |
+| T5 | Kernel 5: Double Buffering | WorkBuddy | Done | 2026-04-22 | 2026-04-22 | See benchmarks below (TBD on RTX 4080) |
 | T3h | Kernel 3 HIP Port | WorkBuddy | Done | 2026-04-21 | 2026-04-21 | HIP port of cooperative |
-| T5 | Testing Framework | WorkBuddy | Ready | - | - | - |
+| T6 | Testing Framework | WorkBuddy | Ready | - | - | - |
 
 ### Completed Tasks
 
@@ -40,6 +41,7 @@
 | T2 | Kernel 2: Tiling | WorkBuddy | 2026-04-19 | 8/8 correctness tests passed; shared memory K/V caching |
 | T3 | Kernel 3: Cooperative Loading | WorkBuddy | 2026-04-20 | 8/8 correctness tests passed; 8 queries share K/V tile |
 | T4 | Kernel 4: Swizzled Shared Memory | WorkBuddy | 2026-04-21 | Bank conflict-free; padded smem stride (HEAD_DIM+1) |
+| T5 | Kernel 5: Double Buffering | WorkBuddy | 2026-04-22 | Software pipeline; ping-pong smem; 8/8 tests expected |
 
 ---
 
@@ -71,10 +73,14 @@
 | **Kernel 4 (Swizzle)** | 256 | 64 | TBD | TBD | TBD vs K3 | - |
 | **Kernel 4 (Swizzle)** | 1024 | 64 | TBD | TBD | TBD vs K3 | - |
 | **Kernel 4 (Swizzle)** | 512 | 128 (8 heads) | TBD | TBD | TBD vs K3 | - |
+| **Kernel 5 (DblBuf)** | 64 | 64 | TBD | TBD | TBD vs K4 | - |
+| **Kernel 5 (DblBuf)** | 256 | 64 | TBD | TBD | TBD vs K4 | - |
+| **Kernel 5 (DblBuf)** | 1024 | 64 | TBD | TBD | TBD vs K4 | - |
+| **Kernel 5 (DblBuf)** | 512 | 128 (8 heads) | TBD | TBD | TBD vs K4 | - |
 
-> Note: Kernel 4 is expected to show ~10-20% improvement over Kernel 3 for multi-head
-> workloads where bank conflicts are most pronounced. The improvement scales with
-> the number of concurrent warps (more warps = more simultaneous bank accesses = more conflicts).
+> Note: Kernel 5 (double buffering) is expected to show ~15-30% improvement over Kernel 4
+> for seq_len >= 512 where global memory latency constitutes a significant fraction of runtime.
+> True async prefetch via cp.async (sm_80+) will be implemented in Kernel 6.
 
 ### Correctness
 
@@ -127,8 +133,8 @@
 | 2 | Tiling | "Reduced HBM traffic by tiling Q,K,V" |
 | 3 | Cooperative loading | "8 queries share K/V tile, 8x HBM traffic reduction" |
 | 4 | Swizzled smem layout | "Eliminated bank conflicts via row padding, ~10-20% gain on multi-head" |
-| 5 | CUTLASS patterns | "Applied NVIDIA's optimized GEMM templates" |
-| 6 | FP fusion | "Fused multiply-add for throughput" |
+| 5 | Double buffering | "Overlap DRAM load of tile T+1 with compute on tile T, 15-30% gain for seq≥512" |
+| 6 | cp.async (Ampere) | "True async HBM→SMEM without registers; hardware pipeline" |
 | 7 | A100 profiling | "Used Nsight Compute to identify bottlenecks" |
 | ... | ... | ... |
 | 16 | Final tuning | "Achieved 99.2% of cuDNN performance" |

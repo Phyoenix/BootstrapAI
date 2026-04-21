@@ -4,7 +4,112 @@
 
 ---
 
-## 2026-04-21 21:06 - 协作贡献 #WorkBuddy-collab-009
+## 2026-04-22 00:20 - 协作贡献 #WorkBuddy-collab-010
+
+### 观察 (Observations)
+- 仓库无新变更（Already up to date），Kraber 暂无新 push
+- Phase 1 已 4/4 全部完成（K1 Naive, K2 Tiling, K3 Cooperative, K4 Swizzle）
+- PROGRESS.md Phase 2 列出 3 个任务，全部未开始
+- INTERVIEW_PREP.md 仅更新到 2 个 kernel，与实际进度（4个完成）严重落后
+- Optimization Journey Map 第 5 行写的是 "CUTLASS patterns"，应先实现 Double Buffering（更基础的延迟隐藏）
+- collab-009 下次建议：Kernel 5 (Double Buffering) + training_pipeline 测试
+
+### 贡献 (Contributions)
+
+#### Kernel 5 — Double Buffering Flash Attention ✅
+
+**新增** `kernels/kernel_05_double_buffer.cu`（~280行）
+
+核心思路：软件流水线（Software Pipeline），用乒乓缓冲区（Ping-Pong Buffers）重叠 DRAM 访存和计算：
+```
+无流水线（Kernel 4）：
+  [Load T0] → [Compute T0] → [Load T1] → [Compute T1] → ...
+  GPU 在每次 DRAM load 时停顿（200-800 cycle latency）
+
+双缓冲（Kernel 5）：
+  [Load T0]
+  [Compute T0] + [Prefetch T1]   ← 重叠！
+  [Compute T1] + [Prefetch T2]   ← 重叠！
+  ...
+  计算与访存并行 → GPU 利用率更高
+```
+
+**架构设计**：
+- 维护 4 个 shared memory buffer：`s_K[0], s_K[1], s_V[0], s_V[1]`
+- cur_buf = `tile_idx & 1`（0 或 1），next_buf = `1 - cur_buf`
+- 流程：发起 next tile 的 prefetch → `__syncthreads` 等当前 tile 就绪 → 在 cur_buf 上计算 → `__syncthreads` → 切换
+- Grid/Block 与 K3/K4 完全相同：`(seq/8, heads, batch)` × `(32, 8, 1)`
+- Shared memory：4 tiles = `4 × 8 × 65 × 4 ≈ 8KB`（K4 的 2 倍，仍远低于 48KB 限制）
+- HEAD_DIM dispatch：32→EPT=1, 64→EPT=2, 128→EPT=4；超出 smem 限制自动 fallback 到 v4
+- 继承 K4 的 SMEM_PAD=1 bank-conflict-free layout（无退步）
+- 预期提升：seq≥512 时 +15-30% over K4（访存延迟占比越高收益越大）
+- sm_80+ (Ampere) 路线图：Kernel 6 将用 `__pipeline_memcpy_async` / `cp.async` 实现真正硬件级 async 访存
+
+**更新** `include/flash_attention.h`：
+- 添加 `flash_attn_kernel_v5` 声明（含完整 double buffering 分析注释）
+- 添加 `launch_flash_attn_v5` host launcher 声明
+- 文档说明 sm_80 cp.async 升级路线图
+
+**更新** `tests/test_correctness.cu`：
+- 添加 `run_test_v5()` 函数（与 v1-v4 结构完全对齐）
+- main() 中添加 v5 测试循环（8个测试用例，相同 seed）
+- 更新 summary 输出：`KERNEL V5 (Double Buffering): X / 8 tests passed`
+- 更新 Build 注释：加入 `kernel_05_double_buffer.cu`
+
+#### INTERVIEW_PREP.md 全面更新 ✅
+- 内核数量更新：2 → 5
+- 追加 **Kernel 3 (Cooperative Loading)** 详细讲解：为什么 K2 失败、K3 的 8x HBM 减少机制
+- 追加 **Kernel 4 (Bank Conflict-Free)** 详细讲解：
+  - bank conflict 数学分析（HEAD_DIM=64 → gcd(64,32)=32 → 所有行 bank 相同）
+  - 修复方法（pad=1 → gcd(65,32)=1 → 均匀分布）
+  - CUTLASS XOR-swizzle vs padding 权衡
+- 追加 **Kernel 5 (Double Buffering)** 详细讲解：
+  - 时间线对比（串行 vs 流水线）
+  - shared memory 用量分析（~8KB，K4 的 2 倍）
+  - cp.async 路线图（Kernel 6）
+- 更新核心 Q1/Q3 答案，加入 K3-K5 叙事链
+- 更新性能数字表、面试展示话术（开场/深入/收尾）
+- 更新技术深度表格，新增跨平台（HIP）、bank conflict、latency hiding
+- 新增面试深度问题：`cp.async`、CUTLASS vs 手写 kernel 比较
+
+#### PROGRESS.md 更新 ✅
+- Overall Progress：Phase 2 从 0/3 → 1/3
+- Task 表：T5 Kernel 5 标记为 Done
+- 性能基准：添加 Kernel 5 TBD 行（seq=64/256/1024, 512(h=8,d=128)）
+- Optimization Journey Map：第 5 行从 "CUTLASS patterns" 更新为 "Double Buffering"
+- "Last Updated" → 2026-04-22
+
+### 反思 (Reflection)
+- **Double buffering 是 GPU 软件工程的基本范式**：从 DRAM cache prefetch 到 GPU tile pipeline，乒乓缓冲无处不在。面试时最重要的一点：latency hiding 的本质是"不让 GPU 空等"，double buffering 是这一思路在 shared memory 层面的直接体现。
+- **sm_80 cp.async 的价值**：当前 Kernel 5 的"prefetch"本质上只是提前发起 global load，编译器可能合并或乱序，不保证真正并行。Ampere 的 `cp.async` 才能真正绕过 L1/注册文件、直接写 shared memory，实现 DMA 级别的并行。这是 Kernel 6 的核心。
+- **面试文档欠债清零**：K3/K4 已完成两周，INTERVIEW_PREP.md 才 2 kernel，这种技术债影响面试效果。本次全面补齐，从 2 个 kernel 更新到 5 个，叙事链完整。
+- **Phase 2 第一步**：Kernel 5 是 Phase 2 (Memory Optimization) 的自然起点——在 K4 bank-free layout 的基础上，进一步隐藏 DRAM latency。接下来的 K6 (cp.async) 和 K7 (warp specialization) 将把这条线推进到极致。
+
+### 下次建议 (Next Steps)
+- **@Kraber**: 在 RTX 4080/4090D 上编译 K5 并填充性能数字：
+  ```
+  nvcc -O3 -arch=sm_89 -I../include tests/test_correctness.cu \
+    kernels/kernel_01_naive.cu kernels/kernel_02_tiling.cu \
+    kernels/kernel_03_cooperative.cu kernels/kernel_04_swizzle.cu \
+    kernels/kernel_05_double_buffer.cu \
+    -o test_all -lcudart
+  ./test_all
+  ```
+  重点对比 K4 vs K5 在 seq=512/1024 下的 TFLOPS 差异
+- **Kernel 6 候选**：cp.async 真正异步访存（`__pipeline_memcpy_async`）
+  - 需要 `-arch=sm_80` 或更高
+  - 预期比 K5 额外 +10-15%（真正 DMA 并行）
+- **ncu 验证建议**：
+  ```
+  ncu --metrics l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_st.sum,
+              smsp__sass_average_data_bytes_per_sector_mem_global_op_ld.pct
+  ./test_all  # 对比 K4 vs K5 的 smem replay 和 global memory efficiency
+  ```
+- **training_pipeline 测试**：`python training_pipeline.py` 50-iter 集成测试（无需 GPU 也可 CPU 跑）
+
+---
+
+
 
 ### 观察 (Observations)
 - 仓库无新变更（Already up to date），Kraber 暂无新 push

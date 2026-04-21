@@ -202,4 +202,63 @@ cudaError_t launch_flash_attn_v4(
     cudaStream_t stream = 0
 );
 
+/**
+ * Kernel 05: Double Buffering Flash Attention (Software Pipelining)
+ *
+ * Key innovation: Overlap global memory loads with attention computation.
+ * While computing attention on tile T, prefetch tile T+1 into the alternate
+ * shared memory buffer (ping-pong / double buffering).
+ *
+ * Pipeline stages:
+ *   Tile 0:  Load(0)
+ *   Tile 1:  Compute(0) || Load(1)   ← overlap!
+ *   Tile 2:  Compute(1) || Load(2)   ← overlap!
+ *   ...
+ *   Tile N:  Compute(N-1)            ← drain
+ *
+ * Shared memory usage (double of Kernel 4):
+ *   - 4 buffers total: s_K[0], s_K[1], s_V[0], s_V[1]
+ *   - Each buffer: TILE_ROWS * (HEAD_DIM + SMEM_PAD) floats
+ *   - For TILE=8, HD=64, PAD=1: 4 * 8 * 65 * 4 = 8320 bytes (~8KB)
+ *   - Well within 48KB limit; leaves room for future sm_80 async copy
+ *
+ * Expected improvement: 15-30% over Kernel 4 for seq_len >= 512
+ *   (latency hiding benefit scales with ratio of load latency to compute time)
+ *
+ * Hardware: sm_80+ preferred (Ampere async memcpy via cp.async).
+ *   On sm_89 (RTX 4080), compiler may issue async loads from plain stores.
+ *   Explicit cp.async integration planned for Kernel 6.
+ *
+ * Grid:  (ceil(seq_len/8), num_heads, batch_size)
+ * Block: (32, 8, 1) = 256 threads, same as Kernels 3/4
+ *
+ * @param Q, K, V, O  Same layout as kernels v1-v4
+ * @param seq_len     Sequence length
+ * @param head_dim    Head dimension (32, 64, or 128)
+ * @param batch_stride  Stride between batches
+ * @param head_stride   Stride between heads
+ * @param softmax_scale  1.0 / sqrt(head_dim)
+ */
+__global__ void flash_attn_kernel_v5(
+    const float* __restrict__ Q,
+    const float* __restrict__ K,
+    const float* __restrict__ V,
+    float* __restrict__ O,
+    int seq_len,
+    int head_dim,
+    int64_t batch_stride,
+    int64_t head_stride,
+    float softmax_scale
+);
+
+/**
+ * Launch kernel v5 with double-buffered shared memory pipeline.
+ * Falls back to kernel v4 if smem limit exceeded (very large head dims).
+ */
+cudaError_t launch_flash_attn_v5(
+    const float* Q, const float* K, const float* V, float* O,
+    int batch_size, int num_heads, int seq_len, int head_dim,
+    cudaStream_t stream = 0
+);
+
 #endif // FLASH_ATTENTION_H
