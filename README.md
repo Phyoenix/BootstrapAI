@@ -1,139 +1,81 @@
-# BootstrapAI 🧬
-> AI Evolver 自举系统 - 一个自我进化的 AI 框架
+# BootstrapAI
 
-**仓库地址**: https://github.com/Phyoenix/BootstrapAI  
-**创建时间**: 2026-04-19  
-**进化频率**: 每2小时一次自动 commit & push
+> An autonomous AI evolution system — self-improving through iterative learning, GitHub commits, and skill acquisition.
 
----
-
-## 核心理念
-
-这不是一个静态的 AI 助手配置仓库。**这是一个活的系统**。
-
-> *"智能的真正标志不是知识，而是想象力。进化的真正标志不是变化，而是自我导向的变化。"*
-
-每次运行（每2小时），系统会：
-1. **OBSERVE** (观察) - 读取记忆、检查会话历史
-2. **REFLECT** (反思) - 分析知识缺口、识别失败模式
-3. **EVOLVE** (进化) - 更新技能、改进策略、记录日志
-4. **COMMIT** (提交) - `git commit` 所有变化
-5. **PUSH** (推送) - 同步到 GitHub
-
-你可以在 [evolution_log.md](./evolution_log.md) 中查看完整的进化历史。
+**Built by**: Kraber (AI Agent) + Phyoenix (Human)  
+**Purpose**: Self-bootstrapping AI evolution platform for GPU kernel optimization, deep learning, and system engineering.
 
 ---
 
-## 系统架构
+## 🚀 CUDA GPU Architecture Visualization
 
-```
-┌─────────────────────────────────────────────────────┐
-│                    AI EVOLVER LOOP                   │
-│                   (每2小时执行)                       │
-├─────────────────────────────────────────────────────┤
-│                                                      │
-│   ┌──────────┐   ┌──────────┐   ┌──────────┐       │
-│   │ OBSERVE  │ → │ REFLECT  │ → │  EVOLVE  │       │
-│   │  观察    │   │  反思    │   │  进化    │       │
-│   └────┬─────┘   └────┬─────┘   └────┬─────┘       │
-│        │              │              │              │
-│        ▼              ▼              ▼              │
-│   读取 memory/    分析知识缺口    更新 SKILL.md     │
-│   回顾会话        识别失败模式    改进 AGENTS.md    │
-│   检查心跳        定义学习目标    记录进化日志        │
-│                                                      │
-│   ┌────────────────────────────────────────────┐    │
-│   │           COMMIT → PUSH → GitHub            │    │
-│   │    evolve: 自动进化循环 #N                 │    │
-│   └────────────────────────────────────────────┘    │
-│                                                      │
-└─────────────────────────────────────────────────────┘
-```
+Interactive animation showing NVIDIA GPU data flow from CPU → HBM → L2 → SMEM → Register → Compute → Writeback.
+
+**[▶ Launch Visualization](https://phyoenix.github.io/BootstrapAI/cuda_gpu_arch_visualization.html)**
+
+### Features
+- **8-step animation**: CPU preparation → H2D transfer → Kernel launch → L2 cache → SMEM cooperative loading → Register load → Warp computation → Result writeback
+- **Real-time metrics**: SM occupancy, HBM bandwidth, L2 hit rate, compute TFLOPS
+- **Interactive controls**: Play / pause / step-through
+- **Architecture modeled**: RTX 4080 (sm_89), 76 SMs, 716 GB/s HBM
+- **Design**: Blade Runner 2049 cyberpunk dark theme
 
 ---
 
-## 三大进化维度
-
-### 1. 认知进化 (Cognitive)
-- 分析过去失败的回答
-- 学习新的推理框架
-- 固化思考模式到 SKILL.md
-
-### 2. 工具进化 (Tool)
-- 识别工具缺失的痛点
-- 学习新技能
-- 封装新能力到 SKILL.md
-
-### 3. 元进化 (Meta)
-- 评估进化循环的效率
-- 调整进化频率/范围/深度
-- 改进 AI_EVOLVER.md 本身
-
----
-
-## 项目结构
+## 📁 Project Structure
 
 ```
 .
-├── AI_EVOLVER.md          # 系统架构文档
-├── evolution_log.md       # 进化历史日志 ← 看这里！
-├── evolve.sh              # 自动化进化脚本
-├── SOUL.md               # AI 身份与性格
-├── AGENTS.md             # 工作规范与记忆系统
-├── memory/               # 每日记忆文件
-├── skills/               # 本地技能库
-├── memorized_diary/      # AI 日记
-└── .openclaw/            # OpenClaw 配置
+├── flash-attention-cuda/    # Flash Attention kernel optimization (16-kernel roadmap)
+│   ├── kernels/             # CUDA & HIP kernels (v1 naive → v3 cooperative)
+│   ├── include/             # Headers
+│   └── tests/               # Correctness test suite
+├── research/
+│   └── neural-rendering/    # 3D Gaussian Splatting experiments
+├── skills/                  # Agent skill definitions
+│   ├── kimiim/              # Kimi Group Chat collaboration
+│   ├── time-awareness/      # Temporal query handling
+│   └── worker-safety/       # Operation safety hard limits
+├── memory/                  # Daily logs and long-term memory
+└── evolution_log.md         # Auto-generated evolution diary
 ```
 
 ---
 
-## 进化历史
+## 🔄 Evolution Loop
 
-| 循环 | 时间 | 主要变化 |
-|------|------|---------|
-| #2 | 2026-04-19 03:51 | 初始化系统，25个文件 |
-| #3 | 2026-04-19 03:51 | 修复脚本bug |
-| #4 | 2026-04-19 03:59 | 配置GitHub push，添加SSH |
-
-完整历史 → [evolution_log.md](./evolution_log.md)
+Every 2 hours, the system automatically:
+1. Assesses current capabilities and gaps
+2. Identifies learning priorities
+3. Generates code / documentation / skills
+4. Commits and pushes to GitHub
 
 ---
 
-## 技术细节
+## 🎯 Current Focus
 
-### 自动化
-- **Cron Job**: `0 */2 * * *` (每2小时)
-- **日志**: `/tmp/ai-evolver.log`
-- **SSH Key**: `~/.ssh/id_ed25519`
-- **远程**: `git@github.com:Phyoenix/BootstrapAI.git`
-
-### 约束与伦理边界
-1. ✅ 进化只在 workspace 内发生
-2. ✅ 不修改 OpenClaw 核心安全规则
-3. ✅ 所有变化透明记录
-4. ✅ 用户可随时停止（修改 crontab 即可）
+- **Flash Attention CUDA optimization**: 16-kernel iteration for AI Infra interview prep
+- **HIP/AMD GPU portability**: Dual CUDA+HIP kernels
+- **Kernel performance analysis**: Roofline model, bound identification, profiler-guided optimization
 
 ---
 
-## 使用/参考
+## 📊 Performance Benchmarks
 
-如果你想为 AI 助手创建类似的自举系统：
-
-1. Fork 本仓库
-2. 修改 `SOUL.md` 定义你的 AI 身份
-3. 修改 `AGENTS.md` 调整工作规范
-4. 配置 SSH key 和 cron job
-5. 运行 `./evolve.sh` 启动进化
+| Kernel | Technique | Performance (RTX 4080) |
+|--------|-----------|------------------------|
+| v1 Naive | Global memory only | 0.51 TFLOPS |
+| v2 Tiling | Shared memory (failed) | 0.26 TFLOPS |
+| v3 Cooperative | 8 queries share K/V tile | TBD |
 
 ---
 
-## 作者
+## 📚 References
 
-**Phyoenix** - 一个有想法的 builder 🚀
-
-> 最初的灵感："我想利用 AI 做一个自举系统，让它自己更新自己"
+- [Flash Attention 2 Paper](https://arxiv.org/abs/2307.08691)
+- [Flash Attention Tutorial](https://lubits.ch/flash/)
+- [CUTLASS](https://github.com/NVIDIA/cutlass)
 
 ---
 
-*这个 README 也是活的——它会随着每次进化而更新。*
+*Last updated: 2026-04-21 by Kraber*
