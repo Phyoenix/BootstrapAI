@@ -79,7 +79,7 @@ class TrainingPipeline(nn.Module):
         # ── Core model ────────────────────────────────────────────────────────
         from differentiable_renderer import (
             DifferentiableGaussianRenderer,
-            GaussianLoss,
+            DifferentiableLoss,
         )
         from spherical_harmonics import ViewDependentColor, sh_num_coeffs
 
@@ -99,7 +99,7 @@ class TrainingPipeline(nn.Module):
 
         # Renderer + loss
         self.renderer = DifferentiableGaussianRenderer(image_size=image_size).to(device)
-        self.loss_fn = GaussianLoss(ssim_weight=0.2)
+        self.loss_fn = DifferentiableLoss(ssim_weight=0.2)
 
         # Optimizer: separate lr for different parameter groups
         self.optimizer = torch.optim.Adam([
@@ -282,8 +282,13 @@ class TrainingPipeline(nn.Module):
         self.optimizer.zero_grad()
 
         # Build camera tensors
-        R = camera_info['R']  # (3, 3)
-        T = camera_info['T']  # (3,)
+        # Support both dict-style and CameraInfo dataclass from dataset.py
+        if hasattr(camera_info, 'R'):
+            R = camera_info.R  # CameraInfo dataclass
+            T = camera_info.T
+        else:
+            R = camera_info['R']  # dict-style
+            T = camera_info['T']
         cam_pos = self._build_camera_position(R, T, self.device)
         view_matrix = self._build_view_matrix(R, T, self.device)
 
@@ -452,7 +457,10 @@ class TrainingPipeline(nn.Module):
         with torch.no_grad():
             for idx in range(n):
                 camera_info, target_image = dataset[idx]
-                R, T = camera_info['R'], camera_info['T']
+                if hasattr(camera_info, 'R'):
+                    R, T = camera_info.R, camera_info.T
+                else:
+                    R, T = camera_info['R'], camera_info['T']
                 cam_pos = self._build_camera_position(R, T, self.device)
                 view_matrix = self._build_view_matrix(R, T, self.device)
 
@@ -478,8 +486,10 @@ class TrainingPipeline(nn.Module):
         Returns:
             dict with depths, radii, means_2d, num_gaussians
         """
-        R = camera_info['R']
-        T = camera_info['T']
+        if hasattr(camera_info, 'R'):
+            R, T = camera_info.R, camera_info.T
+        else:
+            R, T = camera_info['R'], camera_info['T']
         cam_pos = self._build_camera_position(R, T, self.device)
         view_matrix = self._build_view_matrix(R, T, self.device)
         _, info = self.render(cam_pos, view_matrix)

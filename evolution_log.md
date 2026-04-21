@@ -52,6 +52,51 @@
 
 ---
 
+## 2026-04-20 22:06 - 协作贡献 #WorkBuddy-collab-008
+
+> 来自 WorkBuddy 协作 Agent（受 Phyoenix 委托）
+
+### 观察 (Observations)
+- Kernel 3 (Cooperative Loading) 已于 collab-007 完成，Flash Attention CUDA 进入收尾阶段
+- `training_v2.py` 已完全整合 `differentiable_renderer.py`，梯度流通验证通过
+- **关键缺口**: `density_control.py` 与 `training_v2.py` 完全解耦——密度控制从未在训练循环中被调用
+- `COLLAB.md` 分工表中 "CUDA Rasterization" 标记为 🟡 Next，但密度控制集成更紧迫（无密度控制 = 无法收敛）
+
+### 贡献 (Contributions)
+
+#### training_pipeline.py — 密度控制训练管线 ✅
+- **新增** `research/neural-rendering/src/training_pipeline.py`（~340行）
+- **核心**: `TrainingPipeline(nn.Module)` — 将 density_control + renderer + loss 融合成完整训练管线
+
+  **每次 train_step 流程**:
+  1. 前向渲染（`DifferentiableGaussianRenderer`）
+  2. L1+SSIM 损失计算
+  3. `loss.backward()`
+  4. `optimizer.step()`
+  5. 收集位置梯度（`_xyz.grad`）→ 更新 `GradientAccumulator`
+  6. `AdaptiveDensityController.step()` → clone/split/prune
+  7. 重新注册 optimizer params（高斯数量变化后）
+
+  **关键功能**:
+  - **参数分组**: positions lr=0.01，rotations/scales/opacities/SH lr=0.005（与论文比例匹配）
+  - **接口兼容**: 同时支持 `CameraInfo` dataclass (Kraber 的 dataset.py) 和 dict 格式
+  - **evaluate()**: 全数据集 PSNR/SSIM/Loss 评估
+  - **save_checkpoint / load_checkpoint**: 完整状态持久化
+  - **日志**: 密度控制每次触发时打印 cloned/split/pruned 数量
+
+### 反思 (Reflection)
+- 密度控制的"重新注册 optimizer"是关键工程挑战：高斯 clone/split 后参数张量被替换为新 `nn.Parameter`，Adam 的 state 必须重置
+- 当前实现在密度控制后重置 optimizer state（loss 会短暂跳动），更优雅的做法是 selective optimizer state transfer（可作为后续改进）
+- `training_v2.py`（Kraber 实现）的 `Trainer` 只做了 renderer 集成，density control 是完全缺失的——这是训练无法收敛的根本原因
+
+### 下次建议 (Next Steps)
+- **@Kraber**: 用 `training_pipeline.py` 替换 `training_v2.py`；或在 `training_v2.py` 的 `Trainer` 中仿照集成密度控制
+- **性能**: 在 RTX 4090D 上运行 1000 iter 测试，观察 PSNR 曲线和密度控制是否正常触发
+- **Kernel 4 (Bank Conflict 优化)**: Kernel 3 性能已验证，可以推进 swizzle shared memory layout
+- **下一个研究目标**: 集成 Kraber 的 NeRFDataset + 真实 COLMAP 数据，跑第一个 real-scene 训练
+
+---
+
 ## 2026-04-20 19:05 - 协作贡献 #WorkBuddy-collab-007
 
 ### 观察 (Observations)
