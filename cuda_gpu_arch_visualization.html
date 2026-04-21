@@ -1,0 +1,1020 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CUDA GPU 架构与数据流动画 - Kraber</title>
+<style>
+  :root {
+    --bg: #0a0e1a;
+    --panel: #111827;
+    --border: #1f2937;
+    --text: #e5e7eb;
+    --text-dim: #6b7280;
+    --accent: #3b82f6;
+    --accent-glow: rgba(59, 130, 246, 0.3);
+    --cpu: #ef4444;
+    --hbm: #f59e0b;
+    --l2: #10b981;
+    --smem: #8b5cf6;
+    --reg: #06b6d4;
+    --sm: #ec4899;
+    --warp: #f97316;
+    --thread: #14b8a6;
+    --data-pkt: #fbbf24;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
+    overflow: hidden;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Header */
+  header {
+    padding: 12px 24px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  header h1 {
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+
+  header .subtitle {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-left: 12px;
+  }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .badge-cuda { background: var(--accent); color: #fff; }
+  .badge-live { background: var(--sm); color: #fff; animation: pulse 2s infinite; }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  /* Main Layout */
+  .main {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+  }
+
+  /* Canvas Area */
+  .canvas-wrap {
+    flex: 1;
+    position: relative;
+    background: radial-gradient(ellipse at center, #0f172a 0%, var(--bg) 100%);
+  }
+
+  canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  /* Info Panel (right side) */
+  .info-panel {
+    width: 320px;
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .info-section {
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .info-section h3 {
+    font-size: 12px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 10px;
+  }
+
+  .metric {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    font-size: 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+  }
+
+  .metric:last-child { border-bottom: none; }
+  .metric .label { color: var(--text-dim); }
+  .metric .value { font-weight: 600; font-family: monospace; }
+
+  .progress-bar {
+    width: 100%;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    margin-top: 8px;
+    overflow: hidden;
+  }
+
+  .progress-bar .fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    transition: width 0.3s ease;
+  }
+
+  /* Legend */
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 11px;
+  }
+
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+  }
+
+  /* Log */
+  .log {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    font-size: 11px;
+    line-height: 1.6;
+  }
+
+  .log-entry {
+    padding: 4px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.02);
+    color: var(--text-dim);
+  }
+
+  .log-entry .ts {
+    color: var(--accent);
+    margin-right: 8px;
+    font-size: 10px;
+  }
+
+  .log-entry.active {
+    color: var(--text);
+    background: rgba(59, 130, 246, 0.05);
+    margin: 0 -12px;
+    padding: 4px 12px;
+  }
+
+  /* Controls */
+  .controls {
+    padding: 12px 16px;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  button {
+    background: var(--border);
+    border: 1px solid #374151;
+    color: var(--text);
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  button:hover {
+    background: #374151;
+    border-color: #4b5563;
+  }
+
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+
+  button.primary:hover {
+    background: #2563eb;
+    border-color: #2563eb;
+  }
+
+  button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .step-label {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-left: auto;
+  }
+
+  /* Stage indicator */
+  .stages {
+    display: flex;
+    gap: 4px;
+    padding: 0 16px 12px;
+  }
+
+  .stage-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--border);
+    transition: all 0.3s;
+  }
+
+  .stage-dot.done { background: var(--accent); }
+  .stage-dot.active {
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent-glow);
+    animation: pulse 1.5s infinite;
+  }
+
+  /* Tooltip */
+  .tooltip {
+    position: absolute;
+    background: rgba(17, 24, 39, 0.95);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 11px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s;
+    z-index: 100;
+    max-width: 240px;
+  }
+
+  .tooltip.show { opacity: 1; }
+  .tooltip .title { font-weight: 600; margin-bottom: 4px; color: var(--text); }
+  .tooltip .desc { color: var(--text-dim); line-height: 1.4; }
+
+  /* Animation for data packets */
+  @keyframes dataFlow {
+    0% { offset-distance: 0%; opacity: 1; }
+    100% { offset-distance: 100%; opacity: 0.3; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div style="display:flex;align-items:center;">
+    <h1>CUDA GPU 架构可视化</h1>
+    <span class="subtitle">Flash Attention Kernel 执行流程模拟</span>
+  </div>
+  <div style="display:flex;gap:6px;">
+    <span class="badge badge-cuda">CUDA</span>
+    <span class="badge badge-live">LIVE</span>
+  </div>
+</header>
+
+<div class="main">
+  <div class="canvas-wrap">
+    <canvas id="gpuCanvas"></canvas>
+    <div class="tooltip" id="tooltip">
+      <div class="title"></div>
+      <div class="desc"></div>
+    </div>
+  </div>
+
+  <div class="info-panel">
+    <div class="info-section">
+      <h3>执行阶段</h3>
+      <div class="stages" id="stages">
+        <div class="stage-dot" data-stage="0"></div>
+        <div class="stage-dot" data-stage="1"></div>
+        <div class="stage-dot" data-stage="2"></div>
+        <div class="stage-dot" data-stage="3"></div>
+        <div class="stage-dot" data-stage="4"></div>
+        <div class="stage-dot" data-stage="5"></div>
+        <div class="stage-dot" data-stage="6"></div>
+        <div class="stage-dot" data-stage="7"></div>
+      </div>
+      <div class="step-label" id="stageName">准备就绪</div>
+    </div>
+
+    <div class="info-section">
+      <h3>性能指标</h3>
+      <div class="metric">
+        <span class="label">SM 占用率</span>
+        <span class="value" id="metric-occupancy">0%</span>
+      </div>
+      <div class="progress-bar"><div class="fill" id="bar-occupancy" style="width:0%"></div></div>
+
+      <div class="metric">
+        <span class="label">HBM 带宽利用率</span>
+        <span class="value" id="metric-hbm">0 GB/s</span>
+      </div>
+      <div class="progress-bar"><div class="fill" id="bar-hbm" style="width:0%"></div></div>
+
+      <div class="metric">
+        <span class="label">L2 Cache 命中率</span>
+        <span class="value" id="metric-l2">0%</span>
+      </div>
+      <div class="progress-bar"><div class="fill" id="bar-l2" style="width:0%"></div></div>
+
+      <div class="metric">
+        <span class="label">计算吞吐量</span>
+        <span class="value" id="metric-compute">0 TFLOPS</span>
+      </div>
+      <div class="progress-bar"><div class="fill" id="bar-compute" style="width:0%"></div></div>
+    </div>
+
+    <div class="info-section">
+      <h3>图例</h3>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--cpu)"></div>CPU / Host</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--hbm)"></div>HBM (Global Memory)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--l2)"></div>L2 Cache</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--smem)"></div>Shared Memory (SMEM)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--reg)"></div>Register File</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--sm)"></div>Streaming Multiprocessor (SM)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--warp)"></div>Warp (32 Threads)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--thread)"></div>Thread</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--data-pkt);border-radius:50%"></div>数据包 (Data Packet)</div>
+    </div>
+
+    <div class="info-section" style="flex:1;display:flex;flex-direction:column;padding:0;">
+      <h3 style="padding:16px 16px 0;">事件日志</h3>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+</div>
+
+<div class="controls">
+  <button id="btn-prev" onclick="anim.prev()">⏮ 上一步</button>
+  <button class="primary" id="btn-play" onclick="anim.togglePlay()">▶ 播放</button>
+  <button id="btn-next" onclick="anim.next()">下一步 ⏭</button>
+  <button onclick="anim.reset()">↺ 重置</button>
+  <span class="step-label" id="stepLabel">Step 0 / 8</span>
+</div>
+
+<script>
+// ==================== CONFIGURATION ====================
+const CONFIG = {
+  stages: [
+    { name: "准备阶段", desc: "CPU 初始化数据，分配 Host 内存" },
+    { name: "H2D 拷贝", desc: "cudaMemcpy: CPU → GPU Global Memory (HBM)" },
+    { name: "Kernel 启动", desc: "Grid 启动，SM 分配 Block，Warp 调度" },
+    { name: "L2 Cache", desc: "数据从 HBM 流入 L2 Cache，准备分发给 SM" },
+    { name: "SMEM 加载", desc: "Warp 协作将 K/V Tile 加载到 Shared Memory" },
+    { name: "Register 加载", desc: "Thread 将 Q 元素加载到私有 Register" },
+    { name: "Warp 计算", desc: "32 Threads 并行计算 dot product + online softmax" },
+    { name: "结果写回", desc: "O 矩阵计算完成，写回 Global Memory" }
+  ],
+  colors: {
+    cpu: '#ef4444',
+    hbm: '#f59e0b',
+    l2: '#10b981',
+    smem: '#8b5cf6',
+    reg: '#06b6d4',
+    sm: '#ec4899',
+    warp: '#f97316',
+    thread: '#14b8a6',
+    data: '#fbbf24',
+    text: '#e5e7eb',
+    textDim: '#6b7280',
+    grid: '#1f2937'
+  }
+};
+
+// ==================== GPU ARCHITECTURE DATA ====================
+// Simplified RTX 4080-like architecture
+const GPU_ARCH = {
+  hbmCapacity: '16 GB',
+  hbmBandwidth: '716 GB/s',
+  l2Capacity: '72 MB',
+  smCount: 76,
+  smemPerSM: '100 KB',
+  regsPerSM: '64K',
+  warpSize: 32,
+  maxThreadsPerBlock: 1024,
+  maxBlocksPerSM: 32
+};
+
+// ==================== CANVAS SETUP ====================
+const canvas = document.getElementById('gpuCanvas');
+const ctx = canvas.getContext('2d');
+let width, height;
+
+function resize() {
+  const rect = canvas.parentElement.getBoundingClientRect();
+  width = rect.width;
+  height = rect.height;
+  canvas.width = width * window.devicePixelRatio;
+  canvas.height = height * window.devicePixelRatio;
+  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ==================== SCENE OBJECTS ====================
+class Rect {
+  constructor(x, y, w, h, color, label, sublabel, info) {
+    this.x = x; this.y = y; this.w = w; this.h = h;
+    this.color = color;
+    this.label = label;
+    this.sublabel = sublabel;
+    this.info = info;
+    this.packets = [];
+    this.glow = 0;
+    this.active = false;
+  }
+
+  draw(ctx, time) {
+    // Glow effect for active
+    if (this.active || this.glow > 0) {
+      ctx.save();
+      ctx.shadowColor = this.color;
+      ctx.shadowBlur = (this.active ? 20 : 0) + this.glow * 15;
+      this.glow *= 0.95;
+      ctx.fillStyle = this.color + '20';
+      ctx.fillRect(this.x - 2, this.y - 2, this.w + 4, this.h + 4);
+      ctx.restore();
+    }
+
+    // Main rect
+    ctx.fillStyle = this.color + '15';
+    ctx.strokeStyle = this.color + '80';
+    ctx.lineWidth = 1.5;
+    ctx.fillRect(this.x, this.y, this.w, this.h);
+    ctx.strokeRect(this.x, this.y, this.w, this.h);
+
+    // Header bar
+    ctx.fillStyle = this.color + '40';
+    ctx.fillRect(this.x, this.y, this.w, 24);
+    ctx.strokeStyle = this.color + '60';
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y + 24);
+    ctx.lineTo(this.x + this.w, this.y + 24);
+    ctx.stroke();
+
+    // Label
+    ctx.fillStyle = CONFIG.colors.text;
+    ctx.font = 'bold 12px "SF Mono", monospace';
+    ctx.fillText(this.label, this.x + 8, this.y + 16);
+
+    // Sublabel
+    if (this.sublabel) {
+      ctx.fillStyle = CONFIG.colors.textDim;
+      ctx.font = '10px "SF Mono", monospace';
+      ctx.fillText(this.sublabel, this.x + 8, this.y + 40);
+    }
+
+    // Info
+    if (this.info) {
+      ctx.fillStyle = CONFIG.colors.textDim;
+      ctx.font = '9px "SF Mono", monospace';
+      const lines = this.info.split('\n');
+      lines.forEach((line, i) => {
+        ctx.fillText(line, this.x + 8, this.y + 54 + i * 12);
+      });
+    }
+
+    // Data packets
+    this.packets.forEach(p => this.drawPacket(ctx, p, time));
+  }
+
+  drawPacket(ctx, p, time) {
+    const progress = ((time - p.start) / p.duration) % 1;
+    if (progress < 0 || progress > 1) return;
+
+    const px = this.x + 8 + progress * (this.w - 16);
+    const py = this.y + this.h / 2 + Math.sin(progress * Math.PI * 4) * 3;
+
+    ctx.save();
+    ctx.globalAlpha = 1 - progress * 0.5;
+    ctx.fillStyle = CONFIG.colors.data;
+    ctx.shadowColor = CONFIG.colors.data;
+    ctx.shadowBlur = 8;
+    ctx.beginPath();
+    ctx.arc(px, py, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  addPacket(duration) {
+    this.packets.push({ start: performance.now(), duration: duration || 1000 });
+    // Cleanup old
+    const now = performance.now();
+    this.packets = this.packets.filter(p => now - p.start < p.duration);
+  }
+
+  contains(mx, my) {
+    return mx >= this.x && mx <= this.x + this.w && my >= this.y && my <= this.y + this.h;
+  }
+}
+
+// ==================== SCENE DEFINITION ====================
+function createScene() {
+  const pad = 20;
+  const col1 = pad;
+  const col1w = (width - pad * 3) * 0.28;
+  const col2 = col1 + col1w + pad;
+  const col2w = (width - pad * 3) * 0.40;
+  const col3 = col2 + col2w + pad;
+  const col3w = (width - pad * 3) * 0.28;
+
+  const rowH = (height - pad * 2 - 80) / 5;
+
+  const scene = [];
+
+  // Column 1: Memory Hierarchy
+  scene.push(new Rect(col1, pad, col1w, rowH, CONFIG.colors.cpu,
+    'CPU (Host)', 'AMD Ryzen / Intel Core',
+    '页锁定内存 (Pinned)\ncudaMallocHost()\n带宽: ~16 GB/s PCIe'));
+
+  scene.push(new Rect(col1, pad + rowH + 10, col1w, rowH * 1.2, CONFIG.colors.hbm,
+    'HBM / Global Memory', '16 GB GDDR6X',
+    '显存全局地址空间\ncudaMalloc() 分配\n带宽: 716 GB/s\n延迟: ~400ns'));
+
+  scene.push(new Rect(col1, pad + rowH * 2.4 + 20, col1w, rowH, CONFIG.colors.l2,
+    'L2 Cache', '72 MB',
+    '所有 SM 共享\n缓存 K/V Tile\n命中率目标: >90%\n延迟: ~20ns'));
+
+  // Column 2: SM Internal
+  const smY = pad + rowH * 0.5;
+  scene.push(new Rect(col2, smY, col2w, rowH * 3.5, CONFIG.colors.sm,
+    'Streaming Multiprocessor (SM)', '76 SMs on RTX 4080',
+    '» 100 KB Shared Memory\n» 64K 32-bit Registers\n» 4 Warp Schedulers\n» 128 CUDA Cores\n» 4 Tensor Cores'));
+
+  // Inside SM: Blocks
+  const blockW = col2w - 30;
+  const blockH = rowH * 0.7;
+  const blockY = smY + rowH * 1.2;
+
+  scene.push(new Rect(col2 + 15, blockY, blockW, blockH, CONFIG.colors.smem,
+    'Shared Memory (SMEM)', '48 KB per Block',
+    'K Tile: 32×64 floats = 8 KB\nV Tile: 32×64 floats = 8 KB\n__shared__ 声明\n延迟: ~5ns'));
+
+  scene.push(new Rect(col2 + 15, blockY + blockH + 8, blockW, blockH * 0.9, CONFIG.colors.warp,
+    'Warp Scheduler', '4 Active Warps',
+    'Warp 0: query_row 0\nWarp 1: query_row 1\nWarp 2: query_row 2\nWarp 3: query_row 3\n» 8 queries total (coop)'));
+
+  // Threads visualization
+  const threadY = blockY + blockH + 8 + blockH * 0.9 + 8;
+  scene.push(new Rect(col2 + 15, threadY, blockW, rowH * 0.6, CONFIG.colors.thread,
+    'Threads (32 per Warp)', 'lane 0-31',
+    't0: Q[0], K[0], V[0]\nt1: Q[1], K[1], V[1]\n...\nt31: Q[31], K[31], V[31]\n» __shfl_xor_sync() 归约'));
+
+  // Column 3: Registers & Compute
+  scene.push(new Rect(col3, pad + rowH * 0.3, col3w, rowH, CONFIG.colors.reg,
+    'Register File', '256 Registers / Thread',
+    'q_local[2]  ← Q[i]\nacc_local[2] ← accumulator\nm_i, l_i     ← softmax state\n» 零地址空间延迟'));
+
+  scene.push(new Rect(col3, pad + rowH * 1.5, col3w, rowH * 1.5, CONFIG.colors.reg,
+    'CUDA Core', 'FP32 FMA',
+    's_ij = dot(Q_i, K_j)\nalpha = exp(m_i - m_new)\nacc *= alpha + beta * V\n» 1 cycle / FMA'));
+
+  scene.push(new Rect(col3, pad + rowH * 3.2, col3w, rowH, CONFIG.colors.hbm,
+    '输出 O', 'seq_len × head_dim',
+    'O_i = acc_i / l_i\n写回 Global Memory\n» 延迟隐藏'));
+
+  return scene;
+}
+
+// ==================== DATA FLOW ARROWS ====================
+class Arrow {
+  constructor(x1, y1, x2, y2, color, label, active) {
+    this.x1 = x1; this.y1 = y1;
+    this.x2 = x2; this.y2 = y2;
+    this.color = color;
+    this.label = label;
+    this.active = active || false;
+    this.particles = [];
+    this.progress = 0;
+  }
+
+  draw(ctx, time) {
+    ctx.save();
+
+    // Line
+    ctx.strokeStyle = this.active ? this.color : this.color + '30';
+    ctx.lineWidth = this.active ? 2 : 1;
+    ctx.setLineDash(this.active ? [] : [4, 4]);
+
+    ctx.beginPath();
+    ctx.moveTo(this.x1, this.y1);
+
+    // Curved path
+    const midX = (this.x1 + this.x2) / 2;
+    const midY = (this.y1 + this.y2) / 2;
+    const cpX = midX + (this.y2 - this.y1) * 0.1;
+    const cpY = midY - (this.x2 - this.x1) * 0.1;
+    ctx.quadraticCurveTo(cpX, cpY, this.x2, this.y2);
+    ctx.stroke();
+
+    // Arrowhead
+    if (this.active) {
+      const angle = Math.atan2(this.y2 - cpY, this.x2 - cpX);
+      ctx.fillStyle = this.color;
+      ctx.beginPath();
+      ctx.moveTo(this.x2, this.y2);
+      ctx.lineTo(this.x2 - 8 * Math.cos(angle - 0.4), this.y2 - 8 * Math.sin(angle - 0.4));
+      ctx.lineTo(this.x2 - 8 * Math.cos(angle + 0.4), this.y2 - 8 * Math.sin(angle + 0.4));
+      ctx.fill();
+    }
+
+    // Label
+    if (this.label) {
+      ctx.fillStyle = this.active ? CONFIG.colors.text : CONFIG.colors.textDim;
+      ctx.font = '9px "SF Mono", monospace';
+      const lx = (this.x1 + this.x2) / 2 - 20;
+      const ly = (this.y1 + this.y2) / 2;
+      ctx.fillText(this.label, lx, ly);
+    }
+
+    // Flowing particles
+    if (this.active) {
+      this.addParticle();
+      this.drawParticles(ctx, time);
+    }
+
+    ctx.restore();
+  }
+
+  addParticle() {
+    if (Math.random() < 0.3) {
+      this.particles.push({
+        t: 0,
+        speed: 0.02 + Math.random() * 0.01
+      });
+    }
+  }
+
+  drawParticles(ctx, time) {
+    this.particles = this.particles.filter(p => p.t < 1);
+    this.particles.forEach(p => {
+      p.t += p.speed;
+      const t = p.t;
+      const midX = (this.x1 + this.x2) / 2;
+      const midY = (this.y1 + this.y2) / 2;
+      const cpX = midX + (this.y2 - this.y1) * 0.1;
+      const cpY = midY - (this.x2 - this.x1) * 0.1;
+
+      // Quadratic bezier
+      const px = (1-t)*(1-t)*this.x1 + 2*(1-t)*t*cpX + t*t*this.x2;
+      const py = (1-t)*(1-t)*this.y1 + 2*(1-t)*t*cpY + t*t*this.y2;
+
+      ctx.globalAlpha = 1 - t;
+      ctx.fillStyle = this.color;
+      ctx.shadowColor = this.color;
+      ctx.shadowBlur = 6;
+      ctx.beginPath();
+      ctx.arc(px, py, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.shadowBlur = 0;
+    });
+  }
+}
+
+function createArrows(scene) {
+  const arrows = [];
+  const [cpu, hbm, l2, sm, smem, warp, threads, reg, core, out] = scene;
+
+  arrows.push(new Arrow(
+    cpu.x + cpu.w, cpu.y + cpu.h/2,
+    hbm.x, hbm.y + hbm.h/2,
+    CONFIG.colors.hbm, 'PCIe', false
+  ));
+
+  arrows.push(new Arrow(
+    hbm.x + hbm.w, hbm.y + hbm.h/2,
+    l2.x, l2.y + l2.h/2,
+    CONFIG.colors.l2, '', false
+  ));
+
+  arrows.push(new Arrow(
+    l2.x + l2.w, l2.y + l2.h/2,
+    sm.x, sm.y + sm.h * 0.35,
+    CONFIG.colors.sm, '', false
+  ));
+
+  arrows.push(new Arrow(
+    sm.x + sm.w * 0.5, sm.y + sm.h * 0.35,
+    smem.x + smem.w/2, smem.y,
+    CONFIG.colors.smem, '', false
+  ));
+
+  arrows.push(new Arrow(
+    smem.x + smem.w, smem.y + smem.h/2,
+    reg.x, reg.y + reg.h/2,
+    CONFIG.colors.reg, 'LDG', false
+  ));
+
+  arrows.push(new Arrow(
+    reg.x + reg.w/2, reg.y + reg.h,
+    core.x + core.w/2, core.y,
+    CONFIG.colors.reg, '', false
+  ));
+
+  arrows.push(new Arrow(
+    core.x + core.w/2, core.y + core.h,
+    out.x + out.w/2, out.y,
+    CONFIG.colors.hbm, 'STG', false
+  ));
+
+  arrows.push(new Arrow(
+    warp.x + warp.w/2, warp.y + warp.h,
+    threads.x + threads.w/2, threads.y,
+    CONFIG.colors.warp, '', false
+  ));
+
+  return arrows;
+}
+
+// ==================== ANIMATION CONTROLLER ====================
+class Animation {
+  constructor() {
+    this.step = -1;
+    this.playing = false;
+    this.scene = [];
+    this.arrows = [];
+    this.metrics = {
+      occupancy: 0,
+      hbmUtil: 0,
+      l2Hit: 0,
+      compute: 0
+    };
+    this.logs = [];
+    this.lastTime = 0;
+    this.init();
+  }
+
+  init() {
+    this.scene = createScene();
+    this.arrows = createArrows(this.scene);
+    this.log('系统初始化完成', 'GPU 架构模型加载: RTX 4080 (sm_89)');
+    this.draw();
+  }
+
+  log(title, detail) {
+    const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    this.logs.unshift({ ts, title, detail, active: true });
+    if (this.logs.length > 50) this.logs.pop();
+    this.updateLogUI();
+  }
+
+  updateLogUI() {
+    const logEl = document.getElementById('log');
+    logEl.innerHTML = this.logs.map((l, i) => `
+      <div class="log-entry ${i === 0 ? 'active' : ''}">
+        <span class="ts">${l.ts}</span>${l.title}: ${l.detail}
+      </div>
+    `).join('');
+  }
+
+  setMetrics(m) {
+    Object.assign(this.metrics, m);
+    document.getElementById('metric-occupancy').textContent = this.metrics.occupancy + '%';
+    document.getElementById('bar-occupancy').style.width = this.metrics.occupancy + '%';
+
+    document.getElementById('metric-hbm').textContent = this.metrics.hbmUtil + ' GB/s';
+    document.getElementById('bar-hbm').style.width = Math.min(this.metrics.hbmUtil / 7.16, 100) + '%';
+
+    document.getElementById('metric-l2').textContent = this.metrics.l2Hit + '%';
+    document.getElementById('bar-l2').style.width = this.metrics.l2Hit + '%';
+
+    document.getElementById('metric-compute').textContent = this.metrics.compute + ' TFLOPS';
+    document.getElementById('bar-compute').style.width = Math.min(this.metrics.compute / 50 * 100, 100) + '%';
+  }
+
+  activate(idx) {
+    this.scene.forEach((r, i) => r.active = (i === idx));
+  }
+
+  activateArrow(idx) {
+    this.arrows.forEach((a, i) => a.active = (i === idx));
+  }
+
+  runStep(s) {
+    // Reset
+    this.scene.forEach(r => { r.active = false; r.glow = 0; });
+    this.arrows.forEach(a => a.active = false);
+
+    const stage = CONFIG.stages[s] || { name: '完成', desc: '' };
+    document.getElementById('stageName').textContent = stage.name;
+    document.getElementById('stepLabel').textContent = `Step ${s} / ${CONFIG.stages.length}`;
+
+    // Update stage dots
+    document.querySelectorAll('.stage-dot').forEach((d, i) => {
+      d.className = 'stage-dot';
+      if (i < s) d.classList.add('done');
+      if (i === s) d.classList.add('active');
+    });
+
+    switch(s) {
+      case 0: // Prepare
+        this.activate(0);
+        this.setMetrics({ occupancy: 0, hbmUtil: 0, l2Hit: 0, compute: 0 });
+        this.log('CPU 初始化', '分配 pinned memory, 准备 Q/K/V 数据');
+        break;
+
+      case 1: // H2D
+        this.activate(1);
+        this.activateArrow(0);
+        this.scene[0].addPacket(2000);
+        this.setMetrics({ occupancy: 0, hbmUtil: 16, l2Hit: 0, compute: 0 });
+        this.log('H2D 拷贝启动', 'cudaMemcpyAsync: Host → HBM (16 GB/s PCIe)');
+        break;
+
+      case 2: // Kernel Launch
+        this.activate(3);
+        this.setMetrics({ occupancy: 12, hbmUtil: 0, l2Hit: 0, compute: 0 });
+        this.log('Kernel 启动', 'Grid=(1024,8,2), Block=(32,8,1), 256 threads');
+        break;
+
+      case 3: // L2 Cache
+        this.activate(2);
+        this.activateArrow(1);
+        this.scene[1].addPacket(1500);
+        this.setMetrics({ occupancy: 35, hbmUtil: 716, l2Hit: 45, compute: 0.1 });
+        this.log('L2 缓存填充', 'HBM → L2: K/V Tile 32×64, 带宽饱和');
+        break;
+
+      case 4: // SMEM Load
+        this.activate(4);
+        this.activateArrow(3);
+        this.scene[2].addPacket(1000);
+        this.setMetrics({ occupancy: 68, hbmUtil: 320, l2Hit: 82, compute: 0.5 });
+        this.log('SMEM 协作加载', '8 warps 同时加载 K Tile + V Tile, 8KB each');
+        break;
+
+      case 5: // Register Load
+        this.activate(7);
+        this.activateArrow(4);
+        this.scene[4].addPacket(800);
+        this.setMetrics({ occupancy: 78, hbmUtil: 180, l2Hit: 91, compute: 1.2 });
+        this.log('Register 加载', 'Q_i → q_local[2], acc_local[2], m_i, l_i');
+        break;
+
+      case 6: // Warp Compute
+        this.activate(5);
+        this.activate(6);
+        this.activateArrow(5);
+        this.setMetrics({ occupancy: 85, hbmUtil: 45, l2Hit: 94, compute: 8.5 });
+        this.log('Warp 并行计算', 'dot(Q,K) → __shfl_xor_sync → online softmax → acc');
+        break;
+
+      case 7: // Writeback
+        this.activate(8);
+        this.activateArrow(6);
+        this.scene[8].addPacket(1200);
+        this.setMetrics({ occupancy: 45, hbmUtil: 220, l2Hit: 88, compute: 2.1 });
+        this.log('结果写回', 'O_i = acc_i / l_i → HBM, 延迟隐藏');
+        break;
+
+      default:
+        this.setMetrics({ occupancy: 0, hbmUtil: 0, l2Hit: 0, compute: 0 });
+    }
+  }
+
+  next() {
+    if (this.step < CONFIG.stages.length - 1) {
+      this.step++;
+      this.runStep(this.step);
+    }
+  }
+
+  prev() {
+    if (this.step > 0) {
+      this.step--;
+      this.runStep(this.step);
+    }
+  }
+
+  togglePlay() {
+    this.playing = !this.playing;
+    document.getElementById('btn-play').textContent = this.playing ? '⏸ 暂停' : '▶ 播放';
+    if (this.playing) {
+      this.playLoop();
+    }
+  }
+
+  playLoop() {
+    if (!this.playing) return;
+    if (this.step >= CONFIG.stages.length - 1) {
+      this.step = -1;
+    }
+    this.next();
+    setTimeout(() => this.playLoop(), 2500);
+  }
+
+  reset() {
+    this.step = -1;
+    this.playing = false;
+    document.getElementById('btn-play').textContent = '▶ 播放';
+    this.scene.forEach(r => { r.active = false; r.packets = []; });
+    this.arrows.forEach(a => a.active = false);
+    this.setMetrics({ occupancy: 0, hbmUtil: 0, l2Hit: 0, compute: 0 });
+    document.getElementById('stageName').textContent = '准备就绪';
+    document.getElementById('stepLabel').textContent = 'Step 0 / 8';
+    document.querySelectorAll('.stage-dot').forEach(d => d.className = 'stage-dot');
+    this.logs = [];
+    this.updateLogUI();
+    this.log('重置', '动画已重置，点击播放开始');
+  }
+
+  draw() {
+    const time = performance.now();
+    ctx.clearRect(0, 0, width, height);
+
+    // Background grid
+    ctx.strokeStyle = CONFIG.colors.grid;
+    ctx.lineWidth = 0.5;
+    for (let x = 0; x < width; x += 40) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke();
+    }
+    for (let y = 0; y < height; y += 40) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke();
+    }
+
+    // Draw arrows
+    this.arrows.forEach(a => a.draw(ctx, time));
+
+    // Draw scene
+    this.scene.forEach(r => r.draw(ctx, time));
+
+    // Title overlay
+    ctx.fillStyle = CONFIG.colors.textDim;
+    ctx.font = '10px "SF Mono", monospace';
+    ctx.fillText('NVIDIA GPU Architecture Visualization  •  RTX 4080 (sm_89)  •  Flash Attention v3', 20, height - 10);
+
+    requestAnimationFrame(() => this.draw());
+  }
+}
+
+// ==================== TOOLTIP ====================
+const tooltip = document.getElementById('tooltip');
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  let hovered = null;
+  for (const r of anim.scene) {
+    if (r.contains(mx, my)) {
+      hovered = r;
+      break;
+    }
+  }
+
+  if (hovered) {
+    tooltip.querySelector('.title').textContent = hovered.label;
+    tooltip.querySelector('.desc').textContent = hovered.info || hovered.sublabel || '';
+    tooltip.style.left = (e.clientX + 15) + 'px';
+    tooltip.style.top = (e.clientY + 15) + 'px';
+    tooltip.classList.add('show');
+    canvas.style.cursor = 'pointer';
+  } else {
+    tooltip.classList.remove('show');
+    canvas.style.cursor = 'default';
+  }
+});
+
+// ==================== INIT ====================
+const anim = new Animation();
+
+// Auto-start step 0 after brief delay
+setTimeout(() => {
+  if (anim.step === -1) {
+    anim.next();
+  }
+}, 800);
+
+</script>
+</body>
+</html>
