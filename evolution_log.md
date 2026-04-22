@@ -4,7 +4,113 @@
 
 ---
 
-## 2026-04-22 00:20 - 协作贡献 #WorkBuddy-collab-010
+## 2026-04-22 03:32 - 协作贡献 #WorkBuddy-collab-011
+
+### 观察 (Observations)
+- 仓库无新变更（Already up to date），Kraber 暂无新 push
+- Flash Attention Phase 1 已 4/4 全部完成（K1-K4），Phase 2 完成 1/3（K5）
+- collab-010 下次建议明确指向 "Kernel 6 (cp.async 真正异步 prefetch)"
+- K5 的 double buffering 依赖编译器调度——底层无法保证 DRAM 与计算的真正并行
+- INTERVIEW_PREP.md 中 cp.async 问题已有一行描述，但缺乏完整的技术深度讲解
+- PROGRESS.md 中 K6 只有 Journey Map 占位行，从未实现
+
+### 贡献 (Contributions)
+
+#### Kernel 6 — cp.async Hardware Pipeline Flash Attention ✅
+
+**新增** `kernels/kernel_06_cp_async.cu`（~280行）
+
+核心思路：升级 Kernel 5 的"软件流水线"为 Ampere 硬件级 DMA：
+```
+Kernel 5 (软件流水线，编译器调度):
+  s_K[next_buf] = K_base[...];  // 普通 global load，SM 可能等待
+  __syncthreads();              // 必须等到所有线程完成
+  compute(cur_buf);             // 只有 sync 后才能计算
+
+Kernel 6 (cp.async，硬件保证):
+  cp.async.ca.shared.global [smem], [gmem], 4;  // 专用 DMA 引擎，SM 立即继续
+  cp.async.commit_group;                        // 提交这批 async copy
+  cp.async.wait_group 2;                        // 等到 ≤2 个 stage 仍在途
+  compute(cur_buf);                             // 真正与 copy 并行
+```
+
+**关键设计**：
+- **深度-3 环形缓冲**（vs K5 的深度-2 ping-pong）：s_K/s_V 各有 3 个 slot，滑动窗口
+- **cp.async PTX 宏**：编译期检测 `__CUDA_ARCH__ >= 800`，< 800 优雅降级为同步 load
+  - `CP_ASYNC_F32(dst, src)`：`cp.async.ca.shared.global` 指令，4 字节每次
+  - `CP_ASYNC_COMMIT()`：`cp.async.commit_group`，提交一个 pipeline stage
+  - `CP_ASYNC_WAIT_N(N)`：`cp.async.wait_group N`，精细粒度 fence
+- **填充-计算-预取三段式**：
+  1. Warm-up：提前 issue 前 3 个 tile 的 async load（填充 pipeline）
+  2. Main loop：`wait_prior(D-1)` → compute(cur) → `cp.async(next+D)`
+  3. Drain：loop 结束后 `CP_ASYNC_WAIT_N(0)` 等待所有 in-flight copy 完成
+- **Shared memory 用量**：`D=3` 时 = 3 × 2 × 8 × 65 × 4 = 12480 bytes（~12KB，< 48KB）
+  - HD=128: ~24KB，仍安全
+- **继承 K4/K5 所有优化**：`SMEM_PAD=1`（bank-free），QUERIES_PER_BLOCK=8（8x HBM 减少）
+
+**cp.async 的物理优势（面试重点）**：
+- 普通 global load：HBM → L2 → L1 → 寄存器文件 → shared memory（占用寄存器 + L1 cache line）
+- cp.async：HBM → L2 → shared memory（绕过 L1 和寄存器，零 register pressure）
+- 专用 async copy engine 独立运行，SM 算力不被占用
+
+**更新** `include/flash_attention.h`：
+- 添加 `flash_attn_kernel_v6` 声明（含完整 cp.async 技术文档注释）
+- 添加 `launch_flash_attn_v6` host launcher 声明
+- 文档说明 sm_80+ / sm_89 兼容性，ncu 验证 metrics 建议
+
+**更新** `tests/test_correctness.cu`：
+- 添加 `run_test_v6()` 函数（与 v1-v5 结构完全对齐）
+- main() 中添加 v6 测试循环（8个测试用例，与 v1-v5 使用相同 seed）
+- 更新 summary 输出：`KERNEL V6 (cp.async HW Pipeline): X / 8 tests passed`
+- 更新 Build 注释：加入 `kernel_06_cp_async.cu`
+- 更新 banner：`Kernel v6: cp.async (Ampere HW pipeline)`
+
+#### PROGRESS.md 更新 ✅
+- Overall Progress：Phase 2 从 1/3 → 2/3；总计 5/17 → 6/17（35%）
+- Active Tasks：添加 T6_k Kernel 6 Done 行
+- 性能基准：添加 Kernel 6 TBD 行（4 个测试场景）
+- Optimization Journey Map：K6 从占位更新为完整描述
+
+#### INTERVIEW_PREP.md 更新 ✅
+- Kernels 计数：5/16 → 6/16
+- 开场话术：加入 cp.async 作为第 6 个 kernel 的亮点
+- 深入话术：新增 K6 段落，解释 K5 的编译器依赖局限 → K6 的硬件保证
+- 收尾话术：从"下一步 cp.async"更新为"下一步 warp specialization"
+- 新增完整 **Q6: "What is cp.async and how does it differ from regular global loads?"**
+  - PTX 代码示例（3 条指令的语义）
+  - cp.async 绕过 L1/寄存器的物理路径解析
+  - K5 vs K6 的本质区别（compiler hint vs hardware guarantee）
+- 性能数字：添加 K6 TBD 行
+- 技术深度表格：K6 cp.async PTX 加入 CUDA 编程能力列
+
+### 反思 (Reflection)
+- **cp.async 是面试的高价值话题**：sm_80 cp.async 是 Ampere 最重要的新特性之一，CUTLASS 的 gemm kernel 全面使用，官方 FlashAttention-2 也用它实现 WGMMA pipeline。能手写 cp.async PTX 并解释它绕过 L1/寄存器的物理原因，展示了对 GPU 微架构的深入理解。
+- **深度-3 vs 深度-2 的权衡**：D=2 是最简单的 ping-pong，D=3 能隐藏更长的 HBM latency（800 cycle / ~1ns per cycle → 需要至少 D=2-3 来完全隐藏）。D=4 开始 smem 压力增大。D=3 是 FlashAttention-2 原论文推荐的 stage 数。
+- **降级设计很重要**：代码在 < sm_80 上自动退化为同步 load（结果完全正确），在 sm_80+ 上自动启用 PTX async。这种 backward-compatible 设计是生产代码的标准做法。
+
+### 下次建议 (Next Steps)
+- **@Kraber**: 在 RTX 4080/4090D 上编译 K6 并对比 K5 vs K6 TFLOPS：
+  ```
+  nvcc -O3 -arch=sm_89 -I../include tests/test_correctness.cu \
+    kernels/kernel_01_naive.cu kernels/kernel_02_tiling.cu \
+    kernels/kernel_03_cooperative.cu kernels/kernel_04_swizzle.cu \
+    kernels/kernel_05_double_buffer.cu kernels/kernel_06_cp_async.cu \
+    -o test_all -lcudart
+  ./test_all
+  ```
+  重点关注 K5 vs K6 在 seq=512/1024 下的 TFLOPS 差异；以及
+  `ncu --metrics smsp__warp_issue_stalled_lgstyp_per_warp_active.pct ./test_all`
+  LGSTYP stall % 降低 = cp.async 真正起效的证明
+- **Kernel 7 候选**：Warp Specialization（producer/consumer warps）
+  - Producer warps: 专门负责 cp.async 加载
+  - Consumer warps: 专门负责 attention 计算
+  - 需要 `__syncwarp()` 跨 warp 同步 + warp group 协调
+- **Phase 2 最后一项**：Kernel 7 完成后 Phase 2 (3/3) 全部完成
+- **training_pipeline 测试**：`python training_pipeline.py` 50-iter 集成测试
+
+---
+
+
 
 ### 观察 (Observations)
 - 仓库无新变更（Already up to date），Kraber 暂无新 push

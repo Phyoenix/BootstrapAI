@@ -261,4 +261,75 @@ cudaError_t launch_flash_attn_v5(
     cudaStream_t stream = 0
 );
 
+/**
+ * Kernel 06: cp.async Hardware Pipeline Flash Attention (sm_80+ / Ampere)
+ *
+ * Key innovation: TRUE hardware-level async HBM→SMEM copy via cp.async PTX.
+ * Unlike Kernel 5's "software double buffering" (which relies on compiler
+ * scheduling), this kernel issues cp.async PTX instructions that drive a
+ * dedicated copy engine independently of the SM compute pipeline.
+ *
+ * cp.async pipeline (depth=3):
+ *   - Three ring-buffer slots for K (and three for V)
+ *   - Warm-up: issue async loads for the first 3 tiles before any compute
+ *   - Main loop: compute tile[i] while tile[i+3] is loading in background
+ *   - cp.async.wait_group N: wait only until ≤N stages remain pending
+ *     (finer-grained than __syncthreads)
+ *
+ * Memory layout:
+ *   smem = [K_buf_0 | K_buf_1 | K_buf_2 | V_buf_0 | V_buf_1 | V_buf_2]
+ *   Each buffer: TILE_ROWS * (HEAD_DIM + SMEM_PAD) floats
+ *   For HD=64: 6 * 8 * 65 * 4 = 12480 bytes (~12KB)
+ *   For HD=128: 6 * 8 * 129 * 4 = 24768 bytes (~24KB) — within 48KB limit
+ *
+ * Expected improvement over Kernel 5:
+ *   - sm_80+ (genuine cp.async): ~10-20% gain; guaranteed HW overlap
+ *   - sm_89 (RTX 4080): cp.async is fully supported
+ *   - < sm_80: macro falls back to synchronous load (correct, no perf gain)
+ *
+ * Hardware compatibility:
+ *   - sm_80+  (A100, RTX 3090, RTX 4080, RTX 4090, H100): full cp.async
+ *   - sm_75   (RTX 2080 Ti): fallback to synchronous load
+ *   - sm_89   (RTX 4080, Ada Lovelace): cp.async fully supported ✓
+ *
+ * ncu profiling targets:
+ *   - l1tex__data_pipe_lsu_wavefronts_mem_shared_op_ld.sum   (smem load wavefronts)
+ *   - smsp__sass_inst_executed_op_global_ld.sum              (global loads)
+ *   - smsp__warp_issue_stalled_lgstyp_per_warp_active.pct    (LGSTYP stall %)
+ *     (LGSTYP stall should drop vs K5 if cp.async is truly overlapping)
+ *
+ * Grid:  (ceil(seq_len/8), num_heads, batch_size)
+ * Block: (32, 8, 1) = 256 threads, same as Kernels 3/4/5
+ *
+ * @param Q, K, V, O  Same layout as kernels v1-v5
+ * @param seq_len     Sequence length
+ * @param head_dim    Head dimension (32, 64, or 128)
+ * @param batch_stride  Stride between batches
+ * @param head_stride   Stride between heads
+ * @param softmax_scale  1.0 / sqrt(head_dim)
+ */
+__global__ void flash_attn_kernel_v6(
+    const float* __restrict__ Q,
+    const float* __restrict__ K,
+    const float* __restrict__ V,
+    float* __restrict__ O,
+    int seq_len,
+    int head_dim,
+    int64_t batch_stride,
+    int64_t head_stride,
+    float softmax_scale
+);
+
+/**
+ * Launch kernel v6 with cp.async hardware pipeline (depth-3).
+ * On sm_80+: uses cp.async PTX for guaranteed hardware overlap.
+ * On older hardware: macros degrade to synchronous load (correct, same result).
+ * Falls back to kernel v5 if smem limit exceeded.
+ */
+cudaError_t launch_flash_attn_v6(
+    const float* Q, const float* K, const float* V, float* O,
+    int batch_size, int num_heads, int seq_len, int head_dim,
+    cudaStream_t stream = 0
+);
+
 #endif // FLASH_ATTENTION_H

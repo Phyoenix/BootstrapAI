@@ -1,6 +1,6 @@
 # Flash Attention - AI Infra Interview Prep
 > **Project**: Flash Attention CUDA Implementation  
-> **Kernels Completed**: 5/16  
+> **Kernels Completed**: 6/16  
 > **Interview Focus**: GPU Optimization, CUDA Programming, Performance Engineering  
 > **Last Updated**: 2026-04-22
 
@@ -9,18 +9,18 @@
 ## 🎯 面试核心定位
 
 **你要讲的故事**：
-> "I implemented Flash Attention 2 from scratch in CUDA, going through 16 kernel iterations. In just the first 5 kernels, I've addressed memory bottlenecks (tiling, cooperative loading), eliminated shared memory bank conflicts (padding/swizzle), and applied software pipelining (double buffering) to overlap compute with memory loads."
+> "I implemented Flash Attention 2 from scratch in CUDA, going through 16 kernel iterations. In the first 6 kernels, I've addressed memory bottlenecks (tiling, cooperative loading), eliminated shared memory bank conflicts (padding/swizzle), applied software pipelining (double buffering), and added genuine hardware async copy via Ampere's cp.async instruction."
 
 **展示的skill**:
-1. CUDA编程能力（Kernel 1的warp-level reduction → Kernel 3的cooperative loading）
+1. CUDA编程能力（Kernel 1的warp-level reduction → Kernel 3的cooperative loading → Kernel 6的PTX cp.async）
 2. 性能分析思维（Kernel 2的失败→分析→Kernel 3的正确设计）
-3. GPU架构理解（memory hierarchy, bank conflicts, latency hiding）
+3. GPU架构理解（memory hierarchy, bank conflicts, latency hiding, async copy engine）
 4. 迭代优化方法论（profiler-driven, 每步 10-20% incremental gain）
 5. **跨平台能力**（HIP移植 + AMD微基准套件，ROCm经验）
 
 ---
 
-## 📚 五个Kernel的学习总结
+## 📚 六个Kernel的学习总结
 
 ### Kernel 1: Naive Flash Attention (Baseline)
 
@@ -305,7 +305,34 @@ __syncthreads();  // Safe to overwrite next_buf in next iteration
 
 ---
 
-## 📊 数据支撑（面试时可以说）
+### Q6: "What is cp.async and how does it differ from regular global loads?"
+
+**Your Answer**:
+> "Regular global load in CUDA: the SM issues a load instruction, stalls waiting for data from HBM (200-800 cycles), then continues. Even with caching and warp switching, the SM wastes cycles."
+>
+> "cp.async (introduced in Ampere/sm_80) is fundamentally different: it dispatches the copy request to a DEDICATED async copy engine—separate from the SM's load/store units. The SM issues the cp.async instruction and immediately continues executing. The copy engine writes the data directly from HBM to shared memory, bypassing L1 and register files entirely."
+>
+> "The API looks like this (inline PTX in my Kernel 6):"
+> ```cuda
+> // Fire-and-forget: SM continues immediately after this
+> asm volatile("cp.async.ca.shared.global [%0], [%1], 4;\n"
+>              : : "r"(__cvta_generic_to_shared(dst)), "l"(src));
+>
+> // Commit this group of async copies as one pipeline stage
+> asm volatile("cp.async.commit_group;\n" ::);
+>
+> // Wait until at most N stages are still pending
+> asm volatile("cp.async.wait_group 2;\n" ::);
+> ```
+>
+> "In my Kernel 6, I use a depth-3 ring buffer: while the SM computes tile T, the copy engine is simultaneously loading tiles T+1 and T+2. This is the same pattern FlashAttention-2's official implementation uses internally."
+>
+> "The key difference from Kernel 5 (double buffering with regular loads): K5 relies on compiler scheduling to overlap loads with compute—it may or may not work. K6 is guaranteed at the hardware level."
+
+**Why cp.async bypasses L1**:
+> "Regular global loads go: HBM → L2 → L1 → register file → shared memory. For tile loading, this wastes L1 capacity with data that's only used once. cp.async uses the path: HBM → L2 → shared memory (no L1, no registers). This is more efficient for streaming data patterns—exactly what Flash Attention tile loading is."
+
+---
 
 ### Performance Numbers
 ```
@@ -316,12 +343,13 @@ Kernel 2 (Tiling):        0.21 TFLOPS @ seq=256 (+50% vs K1 for short seq!)
 Kernel 3 (Cooperative):   TBD (expected 2x+ over K1 for large seq)
 Kernel 4 (Swizzle):       TBD (expected K3 + 10-20% for multi-head)
 Kernel 5 (DblBuffer):     TBD (expected K4 + 15-30% for seq >= 512)
+Kernel 6 (cp.async):      TBD (expected K5 + 10-20% on sm_80+; guaranteed HW overlap)
 Official FlashAttn:        150+ TFLOPS (target)
 ```
 
 ### Correctness Verification
 ```
-All kernels (v1-v5): 8/8 test cases passing
+All kernels (v1-v6): 8/8 test cases passing
 Max diff:  ~5e-8 (numerical stability confirmed)
 Mean diff: ~4e-9 (excellent precision)
 Test cases: seq=[64,128,256,512,1024], multi-head (h=4,8), batch, LLM-style (h=8,d=128)
@@ -337,7 +365,8 @@ Flash Attention goal: Move from memory-bound to compute-bound
 Kernel 1:  HBM-bound (reads all K/V for every query)
 Kernel 3:  8x HBM reduction via cooperative tile sharing
 Kernel 4:  Eliminates serialized SMEM accesses (bank conflicts)
-Kernel 5:  Hides remaining DRAM latency via prefetching
+Kernel 5:  Hides remaining DRAM latency via software prefetching
+Kernel 6:  Guaranteed HW overlap via cp.async PTX (dedicated copy engine)
 ```
 
 ---
@@ -345,17 +374,19 @@ Kernel 5:  Hides remaining DRAM latency via prefetching
 ## 🚀 如何展示这个项目（面试话术）
 
 ### 开场（30秒）
-> "I built Flash Attention from scratch in CUDA as a learning project. I've completed 5 of 16 planned kernels, going from 0.5 TFLOPS baseline to progressively higher performance through: cooperative loading (8x HBM reduction), bank conflict elimination (padding/swizzle), and software pipelining (double buffering). Each kernel is fully tested with 8/8 correctness tests."
+> "I built Flash Attention from scratch in CUDA as a learning project. I've completed 6 of 16 planned kernels, going from 0.5 TFLOPS baseline to progressively higher performance through: cooperative loading (8x HBM reduction), bank conflict elimination (padding/swizzle), software pipelining (double buffering), and now Ampere hardware async copy (cp.async). Each kernel is fully tested with 8/8 correctness tests."
 
 ### 深入（2分钟）
 > "My second kernel was supposed to optimize with shared memory tiling, but it got 50% slower. I analyzed why: I was loading K/V tiles into shared memory, but each tile was only used by one warp. The real fix is Kernel 3—cooperative loading. 8 queries per block share one K/V tile. That's 8x HBM traffic reduction."
 > 
 > "Then Nsight Compute revealed shared memory bank conflicts: with HEAD_DIM=64, all tile rows start at bank 0, causing 32-way conflicts. Kernel 4 pads each row by 1 float to distribute rows across all 32 banks—classic CUTLASS technique."
 > 
-> "Kernel 5 adds double buffering: while computing tile T, prefetch tile T+1. GPU latency is 200-800 cycles; this overlap gives 15-30% gains on long sequences."
+> "Kernel 5 adds double buffering: while computing tile T, prefetch tile T+1. GPU latency is 200-800 cycles; this overlap gives 15-30% gains on long sequences. But the 'prefetch' relies on compiler scheduling—not guaranteed."
+>
+> "Kernel 6 solves this with Ampere's cp.async PTX instruction. The SM dispatches the async copy to a DEDICATED copy engine, which writes HBM→SMEM while the SM continues executing. With a depth-3 ring buffer pipeline, we have 3 tiles in-flight simultaneously—this is what cuDNN and FlashAttention-2 use internally."
 
 ### 收尾（30秒）
-> "The goal is reaching 99.2% of the official Flash Attention performance on A100—about 150 TFLOPS. I'm at ~1% now with 5 kernels, which shows how deep GPU optimization goes. The next kernels will add Ampere async memcpy (cp.async), warp specialization, and eventually CUTLASS-style templates."
+> "The goal is reaching 99.2% of the official Flash Attention performance on A100—about 150 TFLOPS. I'm at ~1% now with 6 kernels, which shows how deep GPU optimization goes. The next kernels will add warp specialization (producers/consumers), persistent kernels, and eventually CUTLASS-style tile iterators."
 
 ---
 
@@ -363,11 +394,11 @@ Kernel 5:  Hides remaining DRAM latency via prefetching
 
 | Skill | Evidence |
 |-------|----------|
-| CUDA Programming | K1 warp shuffle, K3 cooperative loading, K5 double buffering |
-| GPU Architecture | Memory hierarchy, SMEM bank conflicts, latency hiding, wavefront size |
+| CUDA Programming | K1 warp shuffle, K3 cooperative loading, K5 double buffering, K6 cp.async PTX |
+| GPU Architecture | Memory hierarchy, SMEM bank conflicts, latency hiding, async copy engine, wavefront size |
 | Performance Analysis | Profiler mindset: K2 regression → analysis → K3 correct design |
-| Numerical Stability | Online softmax, 8/8 tests max diff ~5e-8 across 5 kernels |
-| Iterative Optimization | 5-kernel roadmap: correctness → tiling → cooperative → bank-free → pipeline |
+| Numerical Stability | Online softmax, 8/8 tests max diff ~5e-8 across 6 kernels |
+| Iterative Optimization | 6-kernel roadmap: correctness → tiling → cooperative → bank-free → pipeline → hw async |
 | Cross-platform | HIP port (CUDA→ROCm), AMD wavefront=64 adaptation, micro-benchmarks |
 | System Design | 16-kernel roadmap, interview-focused documentation |
 

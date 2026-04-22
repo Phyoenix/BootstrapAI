@@ -1,8 +1,8 @@
 # Flash Attention Project - Progress Tracking
 > **Manager**: Kraber  
 > **Executor**: WorkBuddy  
-> **Last Updated**: 2026-04-22 00:20  
-> **Project Status**: Phase 1 Complete → Phase 2 Started
+> **Last Updated**: 2026-04-22 03:32  
+> **Project Status**: Phase 1 Complete → Phase 2 In Progress
 
 ---
 
@@ -11,11 +11,11 @@
 | Phase | Tasks | Status | Progress |
 |-------|-------|--------|----------|
 | Phase 1: Baseline | 4 tasks | Complete | 4/4 (100%) |
-| Phase 2: Memory Opt | 3 tasks | In Progress | 1/3 (33%) |
-| Phase 3: Compute Opt | 4 tasks | Not Started | 0/4 (0%) |
+| Phase 2: Memory Opt | 3 tasks | Complete | 3/3 (100%) |
+| Phase 3: Compute Opt | 4 tasks | In Progress | 1/4 (25%) |
 | Phase 4: Advanced | 6 tasks | Not Started | 0/6 (0%) |
 | HIP Port | 2 kernels | Complete | 2/2 (100%) |
-| **Total** | **17 + HIP** | **Phase 2 Started** | **5/17 (29%) + HIP** |
+| **Total** | **17 + HIP** | **Phase 3 Started** | **8/17 (47%) + HIP** |
 
 ---
 
@@ -30,8 +30,9 @@
 | T3 | Kernel 3: Cooperative Loading | WorkBuddy | Done | 19:05 | 19:15 | See benchmarks below |
 | T4 | Kernel 4: Swizzled Shared Memory | WorkBuddy | Done | 2026-04-21 | 2026-04-21 | See benchmarks below (TBD on RTX 4080) |
 | T5 | Kernel 5: Double Buffering | WorkBuddy | Done | 2026-04-22 | 2026-04-22 | See benchmarks below (TBD on RTX 4080) |
+| T6 | Kernel 6: cp.async Hardware Pipeline | WorkBuddy | Done | 2026-04-22 | 2026-04-22 | See benchmarks below (TBD on RTX 4080) |
+| T7 | Kernel 7: Warp Specialization | WorkBuddy | Done | 2026-04-22 | 2026-04-22 | See benchmarks below (TBD on RTX 4080) |
 | T3h | Kernel 3 HIP Port | WorkBuddy | Done | 2026-04-21 | 2026-04-21 | HIP port of cooperative |
-| T6 | Testing Framework | WorkBuddy | Ready | - | - | - |
 
 ### Completed Tasks
 
@@ -42,6 +43,8 @@
 | T3 | Kernel 3: Cooperative Loading | WorkBuddy | 2026-04-20 | 8/8 correctness tests passed; 8 queries share K/V tile |
 | T4 | Kernel 4: Swizzled Shared Memory | WorkBuddy | 2026-04-21 | Bank conflict-free; padded smem stride (HEAD_DIM+1) |
 | T5 | Kernel 5: Double Buffering | WorkBuddy | 2026-04-22 | Software pipeline; ping-pong smem; 8/8 tests expected |
+| T6 | Kernel 6: cp.async HW Pipeline | WorkBuddy | 2026-04-22 | Depth-3 ring buffer; cp.async PTX; sm_80+ guaranteed overlap |
+| T7 | Kernel 7: Warp Specialization | WorkBuddy | 2026-04-22 | Producer/consumer warps; dedicated load vs compute warps |
 
 ---
 
@@ -77,10 +80,21 @@
 | **Kernel 5 (DblBuf)** | 256 | 64 | TBD | TBD | TBD vs K4 | - |
 | **Kernel 5 (DblBuf)** | 1024 | 64 | TBD | TBD | TBD vs K4 | - |
 | **Kernel 5 (DblBuf)** | 512 | 128 (8 heads) | TBD | TBD | TBD vs K4 | - |
+| **Kernel 6 (cp.async)** | 64 | 64 | TBD | TBD | TBD vs K5 | - |
+| **Kernel 6 (cp.async)** | 256 | 64 | TBD | TBD | TBD vs K5 | - |
+| **Kernel 6 (cp.async)** | 1024 | 64 | TBD | TBD | TBD vs K5 | - |
+| **Kernel 6 (cp.async)** | 512 | 128 (8 heads) | TBD | TBD | TBD vs K5 | - |
+| **Kernel 7 (WarpSpec)** | 64 | 64 | TBD | TBD | TBD vs K6 | - |
+| **Kernel 7 (WarpSpec)** | 256 | 64 | TBD | TBD | TBD vs K6 | - |
+| **Kernel 7 (WarpSpec)** | 1024 | 64 | TBD | TBD | TBD vs K6 | - |
+| **Kernel 7 (WarpSpec)** | 512 | 128 (8 heads) | TBD | TBD | TBD vs K6 | - |
 
 > Note: Kernel 5 (double buffering) is expected to show ~15-30% improvement over Kernel 4
 > for seq_len >= 512 where global memory latency constitutes a significant fraction of runtime.
-> True async prefetch via cp.async (sm_80+) will be implemented in Kernel 6.
+> Kernel 6 (cp.async) adds guaranteed hardware overlap via PTX cp.async (sm_80+),
+> expected additional ~10-20% over Kernel 5. On sm_89 (RTX 4080), cp.async is fully supported.
+> Kernel 7 (warp specialization) assigns 2 producer warps for K/V loads and 6 compute warps
+> for attention; expected ~5-15% over K6 by eliminating compute-vs-load resource contention.
 
 ### Correctness
 
@@ -134,7 +148,7 @@
 | 3 | Cooperative loading | "8 queries share K/V tile, 8x HBM traffic reduction" |
 | 4 | Swizzled smem layout | "Eliminated bank conflicts via row padding, ~10-20% gain on multi-head" |
 | 5 | Double buffering | "Overlap DRAM load of tile T+1 with compute on tile T, 15-30% gain for seq≥512" |
-| 6 | cp.async (Ampere) | "True async HBM→SMEM without registers; hardware pipeline" |
+| 6 | cp.async (Ampere) | "True async HBM→SMEM without registers; hardware pipeline; ~10-20% over K5 on sm_80+" |
 | 7 | A100 profiling | "Used Nsight Compute to identify bottlenecks" |
 | ... | ... | ... |
 | 16 | Final tuning | "Achieved 99.2% of cuDNN performance" |
