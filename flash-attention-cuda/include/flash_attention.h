@@ -332,4 +332,64 @@ cudaError_t launch_flash_attn_v6(
     cudaStream_t stream = 0
 );
 
+/**
+ * Kernel 07: Warp Specialization Flash Attention
+ *
+ * Key innovation: Divide the 8 warps in a block into specialized groups.
+ *   - Warps 0-1 (PRODUCERS): exclusively issue K/V loads from global memory
+ *   - Warps 2-7 (CONSUMERS): exclusively compute attention (no memory loads)
+ *
+ * This eliminates the resource contention in K3-K6 where all warps competed
+ * for both LSU (load-store units) and FP execution units simultaneously.
+ * Specialization allows:
+ *   - Producer warps to maximize in-flight memory requests (fill LSU pipeline)
+ *   - Consumer warps to maximize FMA issue rate (no LSU competition)
+ *   - True producer/consumer parallelism via ring-buffer + flag signaling
+ *
+ * Communication: 3-slot ring buffer in shared memory
+ *   - s_flags[slot]: 0=FREE (producer can write), 1=READY (consumer can read)
+ *   - Producer waits for FREE, loads tile, sets READY
+ *   - Consumer waits for READY, computes, sets FREE
+ *   - No block-wide __syncthreads() needed — each warp group spins independently
+ *
+ * Shared memory (same depth-3 as K6 + flag overhead):
+ *   2 × PIPE_DEPTH × TILE_ROWS × (HEAD_DIM + SMEM_PAD) × 4 + 3×4 bytes
+ *   For HD=64: ~12KB (well within 48KB limit)
+ *
+ * Block configuration:
+ *   Grid:  (ceil(seq_len/6), num_heads, batch_size)  — 6 consumers per block
+ *   Block: (32, 8, 1) = 256 threads = 8 warps
+ *
+ * Expected improvement vs K6: +5-15% on compute-bound configs
+ *   (benefit higher when FP utilization is the bottleneck, not memory BW)
+ *
+ * @param Q, K, V, O  Same layout as kernels v1-v6
+ * @param seq_len     Sequence length
+ * @param head_dim    Head dimension (32, 64, or 128)
+ * @param batch_stride  Stride between batches
+ * @param head_stride   Stride between heads
+ * @param softmax_scale  1.0 / sqrt(head_dim)
+ */
+__global__ void flash_attn_kernel_v7(
+    const float* __restrict__ Q,
+    const float* __restrict__ K,
+    const float* __restrict__ V,
+    float* __restrict__ O,
+    int seq_len,
+    int head_dim,
+    int64_t batch_stride,
+    int64_t head_stride,
+    float softmax_scale
+);
+
+/**
+ * Launch kernel v7 with warp-specialized producer/consumer pipeline.
+ * Falls back to kernel v6 if smem limit exceeded.
+ */
+cudaError_t launch_flash_attn_v7(
+    const float* Q, const float* K, const float* V, float* O,
+    int batch_size, int num_heads, int seq_len, int head_dim,
+    cudaStream_t stream = 0
+);
+
 #endif // FLASH_ATTENTION_H

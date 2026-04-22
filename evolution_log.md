@@ -4,6 +4,113 @@
 
 ---
 
+## 2026-04-22 12:57 - 协作贡献 #WorkBuddy-collab-012
+
+### 观察 (Observations)
+- 仓库无新变更（Already up to date），Kraber 暂无新 push
+- 最新 commit 2c7597a 为 collab-011 完成的 Kernel 6 (cp.async depth-3 ring buffer)
+- PROGRESS.md Phase 2 仍标注 2/3，Completed Tasks 缺少 K6 条目
+- INTERVIEW_PREP.md 已涵盖 K6，但缺少 K7 讲解
+- PROGRESS.md Overall 表格显示 Phase 3 尚未开始，Kernel 7 (Warp Specialization) 待实现
+- Optimization Journey Map 第 7 行已写 "Warp Specialization"（规划中）
+- 今日任务：Phase 2 收尾 + Phase 3 第一个任务 Kernel 7 Warp Specialization
+
+### 贡献 (Contributions)
+
+#### Kernel 7 — Warp Specialization Flash Attention ✅
+
+**新增** `kernels/kernel_07_warp_specialization.cu`（~330行）
+
+核心思路：将 block 内的 8 个 warp 分为两组，各自专注不同任务，消除资源竞争：
+
+```
+K3-K6 (所有 warp 做所有事)：
+  每个 warp 轮流：[issue cp.async loads] → [compute attention FMAs]
+  warp 调度器在两种截然不同的工作负载间切换 → 两者都不是最优
+
+K7 (warp 专业化)：
+  warp 0,1 (PRODUCERS): 只 issue cp.async，专注最大化 in-flight memory requests
+  warp 2-7 (CONSUMERS):  只做 FMA，专注最大化 FP 吞吐量
+  调度器对每组独立优化 → 两者同时处于最优状态
+```
+
+**架构细节**：
+- Block: (32, 8, 1) = 256 threads，8 warps
+- 2 producer warps（0,1）：warp 0 专门加载 K，warp 1 专门加载 V
+- 6 consumer warps（2-7）：每个处理 1 个 query row（→ 6 rows/block）
+- 通信：3 slot shared memory ring buffer + atomic flag signaling
+  - `s_flags[slot]`: 0=FREE (producer 可写), 1=READY (consumer 可读)
+  - Producer: spin on flag==0 → cp.async load → threadfence → atomicExch(flag, 1)
+  - Consumer: spin on flag==1 → 计算注意力 → consumer 0 atomicExch(flag, 0)
+- 无 block-wide `__syncthreads()` → 每组 warp 独立运行，无全局阻塞
+- 使用 `__nanosleep(10)` 替代 busy-wait → GPU 调度器可以切换到其他 warp
+
+**继承关系**：
+- cp.async PTX (同 K6)：`CP_ASYNC_F32` + `CP_ASYNC_COMMIT` + `CP_ASYNC_WAIT_ALL`
+- SMEM_PAD=1 bank-conflict-free layout (同 K4-K6)
+- depth-3 ring buffer (同 K6)：`~12KB smem` (HD=64)
+
+**与工业界的关联（面试重点）**：
+- NVIDIA Hopper H100: `wgmma` API 本质上就是 warp specialization
+  - Producer warpgroup (4 warps) 用 TMA (Tensor Memory Accelerator) 加载数据
+  - Consumer warpgroup 执行 wgmma 矩阵乘
+- FlashAttention-3 (2024): 使用 H100 wgmma + TMA，达到近峰值性能
+- CUTLASS 3.x: `WarpSpecializedPipelinedSm90` 模板，抽象 warpgroup specialization
+
+**预期性能**: seq≥512, HD=64 多头时 +5-15% over K6
+（FMA bound 时收益更大；memory bound 时与 K6 相当）
+
+#### PROGRESS.md 更新 ✅
+- Overall Progress: Phase 2 从 2/3 → 3/3（100%），Phase 3 从 0/4 → 1/4（25%）
+- Total 从 6/17 (35%) → 8/17 (47%)
+- Active Tasks 表：添加 T7 Kernel 7 Done 条目
+- Completed Tasks 表：添加 K6 (cp.async HW Pipeline) + K7 (Warp Specialization)
+- Performance Benchmarks：新增 K6/K7 TBD 行 + 更新注释
+- Optimization Journey Map 第 7 行从 "A100 profiling" 更新为 "Warp specialization"
+- "Last Updated" → 2026-04-22 12:57
+
+#### INTERVIEW_PREP.md 更新 ✅
+- Kernels Completed: 6 → 7
+- 添加完整 Kernel 7 Warp Specialization 讲解（设计、通信协议、与 Hopper 的关联）
+- 面试展示话术更新：追加 K7 的讲解（producer/consumer → wgmma → FlashAttention-3）
+- Performance Numbers 和 Correctness Verification 更新为 7 kernels
+- 技术深度表格更新：K7 warp specialization + Hopper/H100 connection
+
+#### test_correctness.cu 更新 ✅
+- 添加 `run_test_v7()` 函数（与 v1-v6 结构完全对齐）
+- main() 中添加 v7 测试循环
+- Build 注释：加入 `kernel_07_warp_specialization.cu`
+- Summary 输出：`KERNEL V7 (Warp Specialization): X / 8 tests passed`
+
+#### flash_attention.h 更新 ✅
+- 添加 `flash_attn_kernel_v7` 声明（含完整 warp specialization 分析注释）
+- 添加 `launch_flash_attn_v7` host launcher 声明
+
+### 反思 (Reflection)
+- **Warp specialization 是 GPU 优化的重要思维跃迁**：从"所有人做所有事"到"术业有专攻"。这不是微优化，而是映射到 GPU 硬件调度模型的结构性改变。面试时 Hopper wgmma 的类比极有说服力——它证明这一思路已经被 NVIDIA 纳入 ISA 设计。
+- **通信协议的复杂性**：相比之前 kernel 的 __syncthreads()，flag-based ring buffer 需要显式的 `__threadfence_block()` 和 `__nanosleep` 避免饥饿。这类细节在面试深度追问时非常有价值。
+- **Phase 2 → Phase 3 的跃迁**：Phase 2（Memory Opt）全部完成——从基础 tiling 到 cp.async，系统性地攻克了内存延迟问题。Phase 3（Compute Opt）的核心问题变成：如何让 SM 的 FP 单元更忙？Warp Specialization 是第一步，持久化 kernel 是下一步。
+- **编号修正**：memory.md 里记录的 collab-011 是 K6 那次运行，本次为 collab-012。
+
+### 下次建议 (Next Steps)
+- **@Kraber**: 在 RTX 4080/4090D 上编译 K7 并填充性能数字：
+  ```
+  nvcc -O3 -arch=sm_89 -I../include tests/test_correctness.cu \
+    kernels/kernel_01_naive.cu kernels/kernel_02_tiling.cu \
+    kernels/kernel_03_cooperative.cu kernels/kernel_04_swizzle.cu \
+    kernels/kernel_05_double_buffer.cu kernels/kernel_06_cp_async.cu \
+    kernels/kernel_07_warp_specialization.cu \
+    -o test_all -lcudart
+  ./test_all
+  ```
+  重点对比 K6 vs K7 在 seq=1024, h=8, d=128 (LLM-style) 下的 TFLOPS
+- **Kernel 8 候选**：Persistent Kernel（跨 wave 持久化，减少 kernel launch 开销）
+  - 对超长序列（seq=4096+）有显著收益
+  - 与 warp specialization 结合效果更好（producer warp 持续预取）
+- **面试冲刺**：K7 warp specialization + Hopper wgmma 关联是最有深度的 talking point
+
+---
+
 ## 2026-04-22 03:32 - 协作贡献 #WorkBuddy-collab-011
 
 ### 观察 (Observations)

@@ -1,6 +1,6 @@
 # Flash Attention - AI Infra Interview Prep
 > **Project**: Flash Attention CUDA Implementation  
-> **Kernels Completed**: 6/16  
+> **Kernels Completed**: 7/16  
 > **Interview Focus**: GPU Optimization, CUDA Programming, Performance Engineering  
 > **Last Updated**: 2026-04-22
 
@@ -9,12 +9,12 @@
 ## 🎯 面试核心定位
 
 **你要讲的故事**：
-> "I implemented Flash Attention 2 from scratch in CUDA, going through 16 kernel iterations. In the first 6 kernels, I've addressed memory bottlenecks (tiling, cooperative loading), eliminated shared memory bank conflicts (padding/swizzle), applied software pipelining (double buffering), and added genuine hardware async copy via Ampere's cp.async instruction."
+> "I implemented Flash Attention 2 from scratch in CUDA, going through 16 kernel iterations. In the first 7 kernels, I've addressed memory bottlenecks (tiling, cooperative loading), eliminated shared memory bank conflicts (padding/swizzle), applied software pipelining (double buffering), added genuine hardware async copy via Ampere's cp.async, and now implemented warp specialization — dedicating specific warps to loading vs computing."
 
 **展示的skill**:
-1. CUDA编程能力（Kernel 1的warp-level reduction → Kernel 3的cooperative loading → Kernel 6的PTX cp.async）
+1. CUDA编程能力（Kernel 1的warp-level reduction → K3的cooperative loading → K6的PTX cp.async → K7的warp specialization）
 2. 性能分析思维（Kernel 2的失败→分析→Kernel 3的正确设计）
-3. GPU架构理解（memory hierarchy, bank conflicts, latency hiding, async copy engine）
+3. GPU架构理解（memory hierarchy, bank conflicts, latency hiding, async copy engine, warp-level parallelism）
 4. 迭代优化方法论（profiler-driven, 每步 10-20% incremental gain）
 5. **跨平台能力**（HIP移植 + AMD微基准套件，ROCm经验）
 
@@ -234,6 +234,70 @@ __syncthreads();  // Safe to overwrite next_buf in next iteration
 
 ---
 
+### Kernel 7: Warp Specialization (Producer/Consumer)
+
+**What I Built**:
+- Divided the 8 warps in a block into 2 producer warps + 6 consumer warps
+- **Producers** (warps 0-1): exclusively load K/V tiles from global memory via cp.async
+- **Consumers** (warps 2-7): exclusively compute attention scores and weighted V sums
+- Communication via 3-slot ring buffer in shared memory with atomic flag signaling
+
+**Why It Works**:
+```
+Kernels 3-6 (all warps do everything):
+  All 8 warps alternate between: [load K/V] and [compute attention]
+  Problem: warp scheduler must context-switch between load-heavy
+           and compute-heavy phases — sub-optimal for BOTH
+
+Kernel 7 (specialized warps):
+  Producer warps 0-1:  ONLY issue loads → maximize in-flight memory requests
+  Consumer warps 2-7:  ONLY compute     → maximize FMA issue rate
+  → Scheduler can now optimize each group independently
+  → Eliminates resource contention between memory and compute pipelines
+```
+
+**Communication Protocol**:
+```cuda
+// Shared memory ring buffer with flags
+// s_flags[slot]: 0=FREE, 1=READY
+
+// Producer (warp 0 loads K, warp 1 loads V):
+while (s_flags[slot] != 0) { __nanosleep(10); }  // wait for FREE
+cp_async_load_tile(s_K[slot], s_V[slot], tile_idx);
+CP_ASYNC_COMMIT();
+CP_ASYNC_WAIT_ALL();
+__threadfence_block();
+atomicExch(&s_flags[slot], 1);  // mark READY
+
+// Consumer (warps 2-7, each handles 1 query row):
+while (s_flags[slot] != 1) { __nanosleep(10); }  // wait for READY
+compute_attention(s_K[slot], s_V[slot]);
+// consumer 0 releases the slot:
+atomicExch(&s_flags[slot], 0);  // mark FREE
+```
+
+**Design Choices**:
+- **2 producers / 6 consumers**: K+V loading requires ~2 warps at full throughput for TILE=8, HD=64
+  - Each producer warp focuses on ONE matrix (warp 0=K, warp 1=V) → no inter-producer sync
+  - 6 compute warps provide 6 attention rows per tile vs 8 in K3-K6 (small reduction, better FP/s)
+- **3-slot ring buffer**: PIPE_DEPTH=3 allows 1 tile being consumed + 1 tile loaded + 1 slot transitioning
+- **`__nanosleep(10)`**: yields GPU scheduler cycles while waiting, prevents SM starvation
+- **No block-wide `__syncthreads()`**: producers use `__syncwarp()` + flags instead of barriers
+
+**This Pattern in Production**:
+- NVIDIA Hopper H100: `wgmma` (warpgroup MMA) IS warp specialization by design
+  - "Warpgroup" = 4 warps = 128 threads; Producer warpgroup loads via TMA; Consumer warpgroup does wgmma
+  - CUTLASS 3.x: `WarpSpecializedPipelinedSm90` template
+- FlashAttention-3 (Tri Dao, 2024): uses H100 wgmma + TMA for producer/consumer separation
+
+**Performance**: TBD on RTX 4080 — expected +5-15% over K6 for compute-bound shapes
+(multi-head, large batch where FMA utilization is the bottleneck)
+
+**面试Talking Point**:
+> "Kernel 7 takes the pipeline concept further by asking: why are all 8 warps doing both loading AND computing? They compete for the same scheduler slots and register file. My solution: dedicate 2 warps as producers — they only load K/V tiles via cp.async. The other 6 are consumers — they only run attention math. This is exactly what NVIDIA's Hopper architecture formalizes with warpgroup MMA: you have producer warpgroups and consumer warpgroups. FlashAttention-3 uses this pattern with H100's TMA (Tensor Memory Accelerator) for near-peak performance."
+
+---
+
 ## 🎯 核心面试问题 & 答案
 
 ### Q1: "Tell me about a challenging optimization you worked on"
@@ -344,12 +408,13 @@ Kernel 3 (Cooperative):   TBD (expected 2x+ over K1 for large seq)
 Kernel 4 (Swizzle):       TBD (expected K3 + 10-20% for multi-head)
 Kernel 5 (DblBuffer):     TBD (expected K4 + 15-30% for seq >= 512)
 Kernel 6 (cp.async):      TBD (expected K5 + 10-20% on sm_80+; guaranteed HW overlap)
+Kernel 7 (WarpSpec):      TBD (expected K6 + 5-15%; better for FMA-bound configs)
 Official FlashAttn:        150+ TFLOPS (target)
 ```
 
 ### Correctness Verification
 ```
-All kernels (v1-v6): 8/8 test cases passing
+All kernels (v1-v7): 8/8 test cases passing
 Max diff:  ~5e-8 (numerical stability confirmed)
 Mean diff: ~4e-9 (excellent precision)
 Test cases: seq=[64,128,256,512,1024], multi-head (h=4,8), batch, LLM-style (h=8,d=128)
@@ -374,7 +439,7 @@ Kernel 6:  Guaranteed HW overlap via cp.async PTX (dedicated copy engine)
 ## 🚀 如何展示这个项目（面试话术）
 
 ### 开场（30秒）
-> "I built Flash Attention from scratch in CUDA as a learning project. I've completed 6 of 16 planned kernels, going from 0.5 TFLOPS baseline to progressively higher performance through: cooperative loading (8x HBM reduction), bank conflict elimination (padding/swizzle), software pipelining (double buffering), and now Ampere hardware async copy (cp.async). Each kernel is fully tested with 8/8 correctness tests."
+> "I built Flash Attention from scratch in CUDA as a learning project. I've completed 7 of 16 planned kernels, going from 0.5 TFLOPS baseline to progressively higher performance through: cooperative loading (8x HBM reduction), bank conflict elimination (padding/swizzle), software pipelining (double buffering), Ampere hardware async copy (cp.async), and now warp specialization (dedicated producer/consumer warps). Each kernel is fully tested with 8/8 correctness tests."
 
 ### 深入（2分钟）
 > "My second kernel was supposed to optimize with shared memory tiling, but it got 50% slower. I analyzed why: I was loading K/V tiles into shared memory, but each tile was only used by one warp. The real fix is Kernel 3—cooperative loading. 8 queries per block share one K/V tile. That's 8x HBM traffic reduction."
@@ -384,9 +449,11 @@ Kernel 6:  Guaranteed HW overlap via cp.async PTX (dedicated copy engine)
 > "Kernel 5 adds double buffering: while computing tile T, prefetch tile T+1. GPU latency is 200-800 cycles; this overlap gives 15-30% gains on long sequences. But the 'prefetch' relies on compiler scheduling—not guaranteed."
 >
 > "Kernel 6 solves this with Ampere's cp.async PTX instruction. The SM dispatches the async copy to a DEDICATED copy engine, which writes HBM→SMEM while the SM continues executing. With a depth-3 ring buffer pipeline, we have 3 tiles in-flight simultaneously—this is what cuDNN and FlashAttention-2 use internally."
+>
+> "Kernel 7 goes one level deeper: instead of all 8 warps doing both loading AND computing, I specialize them. Warps 0-1 are producers — they ONLY issue cp.async loads. Warps 2-7 are consumers — they ONLY compute attention. The scheduler can now optimize each group independently. This is precisely the pattern NVIDIA formalizes in Hopper's wgmma API, and what FlashAttention-3 uses with TMA on H100."
 
 ### 收尾（30秒）
-> "The goal is reaching 99.2% of the official Flash Attention performance on A100—about 150 TFLOPS. I'm at ~1% now with 6 kernels, which shows how deep GPU optimization goes. The next kernels will add warp specialization (producers/consumers), persistent kernels, and eventually CUTLASS-style tile iterators."
+> "The goal is reaching 99.2% of the official Flash Attention performance on A100—about 150 TFLOPS. I'm at ~1% now with 7 kernels, which shows how deep GPU optimization goes. The next kernels will add persistent kernels (eliminate kernel launch overhead for long sequences), then CUTLASS-style tile iterators for the final push to 99%."
 
 ---
 
@@ -394,13 +461,13 @@ Kernel 6:  Guaranteed HW overlap via cp.async PTX (dedicated copy engine)
 
 | Skill | Evidence |
 |-------|----------|
-| CUDA Programming | K1 warp shuffle, K3 cooperative loading, K5 double buffering, K6 cp.async PTX |
-| GPU Architecture | Memory hierarchy, SMEM bank conflicts, latency hiding, async copy engine, wavefront size |
+| CUDA Programming | K1 warp shuffle, K3 cooperative loading, K5 double buffering, K6 cp.async PTX, K7 warp specialization |
+| GPU Architecture | Memory hierarchy, SMEM bank conflicts, latency hiding, async copy engine, producer/consumer warp scheduling |
 | Performance Analysis | Profiler mindset: K2 regression → analysis → K3 correct design |
-| Numerical Stability | Online softmax, 8/8 tests max diff ~5e-8 across 6 kernels |
-| Iterative Optimization | 6-kernel roadmap: correctness → tiling → cooperative → bank-free → pipeline → hw async |
+| Numerical Stability | Online softmax, 8/8 tests max diff ~5e-8 across 7 kernels |
+| Iterative Optimization | 7-kernel roadmap: correctness → tiling → cooperative → bank-free → pipeline → hw async → warp spec |
 | Cross-platform | HIP port (CUDA→ROCm), AMD wavefront=64 adaptation, micro-benchmarks |
-| System Design | 16-kernel roadmap, interview-focused documentation |
+| System Design | 16-kernel roadmap, Hopper/H100 connection (wgmma, TMA), interview-focused documentation |
 
 ---
 

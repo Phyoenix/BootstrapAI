@@ -3,13 +3,15 @@
  *
  * Compares CUDA kernel output against CPU reference implementation.
  * Tests kernel v1 (naive), v2 (tiling), v3 (cooperative), v4 (swizzle),
- * v5 (double buffering), v6 (cp.async hardware pipeline).
+ * v5 (double buffering), v6 (cp.async hardware pipeline),
+ * v7 (warp specialization).
  *
  * Build:
  *   nvcc -O3 -arch=sm_89 -I../include test_correctness.cu \
  *     ../kernels/kernel_01_naive.cu ../kernels/kernel_02_tiling.cu \
  *     ../kernels/kernel_03_cooperative.cu ../kernels/kernel_04_swizzle.cu \
  *     ../kernels/kernel_05_double_buffer.cu ../kernels/kernel_06_cp_async.cu \
+ *     ../kernels/kernel_07_warp_specialization.cu \
  *     -o test_correctness -lcudart
  *
  * Run:
@@ -615,6 +617,84 @@ bool run_test_v6(const TestCase& tc) {
     return passed;
 }
 
+// ============================================================================
+// Kernel v7 (Warp Specialization) test runner
+// ============================================================================
+
+bool run_test_v7(const TestCase& tc) {
+    printf("\n  Testing: %s (batch=%d, heads=%d, seq=%d, dim=%d)\n",
+           tc.name.c_str(), tc.batch_size, tc.num_heads, tc.seq_len, tc.head_dim);
+
+    int64_t total_elements = (int64_t)tc.batch_size * tc.num_heads * tc.seq_len * tc.head_dim;
+    size_t bytes = total_elements * sizeof(float);
+
+    std::vector<float> h_Q(total_elements), h_K(total_elements), h_V(total_elements);
+    std::vector<float> h_O_cuda(total_elements), h_O_ref(total_elements);
+
+    // Same seeds as v1-v6 for fair comparison
+    init_random(h_Q.data(), total_elements, 42);
+    init_random(h_K.data(), total_elements, 123);
+    init_random(h_V.data(), total_elements, 456);
+
+    standard_attention_cpu(
+        h_Q.data(), h_K.data(), h_V.data(), h_O_ref.data(),
+        tc.batch_size, tc.num_heads, tc.seq_len, tc.head_dim
+    );
+
+    float *d_Q, *d_K, *d_V, *d_O;
+    CUDA_CHECK(cudaMalloc(&d_Q, bytes));
+    CUDA_CHECK(cudaMalloc(&d_K, bytes));
+    CUDA_CHECK(cudaMalloc(&d_V, bytes));
+    CUDA_CHECK(cudaMalloc(&d_O, bytes));
+
+    CUDA_CHECK(cudaMemcpy(d_Q, h_Q.data(), bytes, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_K, h_K.data(), bytes, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_V, h_V.data(), bytes, cudaMemcpyHostToDevice));
+
+    // Launch kernel v7
+    CUDA_CHECK(launch_flash_attn_v7(
+        d_Q, d_K, d_V, d_O,
+        tc.batch_size, tc.num_heads, tc.seq_len, tc.head_dim
+    ));
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    CUDA_CHECK(cudaMemcpy(h_O_cuda.data(), d_O, bytes, cudaMemcpyDeviceToHost));
+
+    bool passed = compare_results(h_O_cuda.data(), h_O_ref.data(), total_elements);
+
+    // Benchmark
+    CudaTimer timer;
+    const int num_warmup = 5;
+    const int num_iters  = 20;
+
+    for (int i = 0; i < num_warmup; i++) {
+        launch_flash_attn_v7(d_Q, d_K, d_V, d_O,
+                             tc.batch_size, tc.num_heads, tc.seq_len, tc.head_dim);
+    }
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    timer.begin();
+    for (int i = 0; i < num_iters; i++) {
+        launch_flash_attn_v7(d_Q, d_K, d_V, d_O,
+                             tc.batch_size, tc.num_heads, tc.seq_len, tc.head_dim);
+    }
+    float ms = timer.end() / num_iters;
+
+    double flops  = compute_attention_flops(tc.batch_size, tc.num_heads, tc.seq_len, tc.head_dim);
+    double tflops = flops / (ms * 1e-3) / 1e12;
+
+    printf("    Time: %.3f ms\n", ms);
+    printf("    TFLOPS: %.2f\n", tflops);
+    printf("    Result: %s\n", passed ? "PASSED" : "FAILED");
+
+    CUDA_CHECK(cudaFree(d_Q));
+    CUDA_CHECK(cudaFree(d_K));
+    CUDA_CHECK(cudaFree(d_V));
+    CUDA_CHECK(cudaFree(d_O));
+
+    return passed;
+}
+
 
 
 int main() {
@@ -623,6 +703,7 @@ int main() {
     printf("Kernel v1: Naive (HBM)       |  Kernel v2: Tiling (Shared Mem)\n");
     printf("Kernel v3: Cooperative (8q)  |  Kernel v4: Swizzle (Bank-CF-Free)\n");
     printf("Kernel v5: Double Buffering  |  Kernel v6: cp.async (Ampere HW pipeline)\n");
+    printf("Kernel v7: Warp Specialization (2 producer + 6 consumer warps)\n");
     printf("============================================================\n");
 
     // Print GPU info
@@ -702,6 +783,14 @@ int main() {
         }
     }
 
+    printf("\n========== KERNEL V7 (Warp Specialization, Producer+Consumer) ==========\n");
+    int passed_v7 = 0;
+    for (const auto& tc : tests) {
+        if (run_test_v7(tc)) {
+            passed_v7++;
+        }
+    }
+
     printf("\n============================================================\n");
     printf("KERNEL V1 (Naive):                   %d / %d tests passed\n", passed_v1, total);
     printf("KERNEL V2 (Tiling):                  %d / %d tests passed\n", passed_v2, total);
@@ -709,9 +798,11 @@ int main() {
     printf("KERNEL V4 (Swizzled, Bank-CF-Free):  %d / %d tests passed\n", passed_v4, total);
     printf("KERNEL V5 (Double Buffering):        %d / %d tests passed\n", passed_v5, total);
     printf("KERNEL V6 (cp.async HW Pipeline):    %d / %d tests passed\n", passed_v6, total);
+    printf("KERNEL V7 (Warp Specialization):     %d / %d tests passed\n", passed_v7, total);
     if (passed_v1 == total && passed_v2 == total && passed_v3 == total &&
-        passed_v4 == total && passed_v5 == total && passed_v6 == total) {
-    printf("ALL TESTS PASSED (all 6 kernels)\n");
+        passed_v4 == total && passed_v5 == total && passed_v6 == total &&
+        passed_v7 == total) {
+    printf("ALL TESTS PASSED (all 7 kernels)\n");
     } else {
         printf("SOME TESTS FAILED\n");
     }
@@ -719,5 +810,6 @@ int main() {
 
     return (passed_v1 == total && passed_v2 == total &&
             passed_v3 == total && passed_v4 == total &&
-            passed_v5 == total && passed_v6 == total) ? 0 : 1;
+            passed_v5 == total && passed_v6 == total &&
+            passed_v7 == total) ? 0 : 1;
 }

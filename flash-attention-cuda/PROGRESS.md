@@ -1,7 +1,7 @@
 # Flash Attention Project - Progress Tracking
 > **Manager**: Kraber  
 > **Executor**: WorkBuddy  
-> **Last Updated**: 2026-04-22 03:32  
+> **Last Updated**: 2026-04-22 12:57  
 > **Project Status**: Phase 1 Complete → Phase 2 In Progress
 
 ---
@@ -148,8 +148,9 @@
 | 3 | Cooperative loading | "8 queries share K/V tile, 8x HBM traffic reduction" |
 | 4 | Swizzled smem layout | "Eliminated bank conflicts via row padding, ~10-20% gain on multi-head" |
 | 5 | Double buffering | "Overlap DRAM load of tile T+1 with compute on tile T, 15-30% gain for seq≥512" |
-| 6 | cp.async (Ampere) | "True async HBM→SMEM without registers; hardware pipeline; ~10-20% over K5 on sm_80+" |
-| 7 | A100 profiling | "Used Nsight Compute to identify bottlenecks" |
+| 6 | cp.async (Ampere) | "True async HBM→SMEM without registers; depth-3 ring buffer; 10-20% over K5" |
+| 7 | Warp specialization | "2 producer warps load K/V; 6 compute warps do attention; removes contention" |
+| 8 | A100 profiling | "Used Nsight Compute to identify bottlenecks" |
 | ... | ... | ... |
 | 16 | Final tuning | "Achieved 99.2% of cuDNN performance" |
 
