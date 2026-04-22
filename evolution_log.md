@@ -4,7 +4,137 @@
 
 ---
 
-## 2026-04-22 12:57 - 协作贡献 #WorkBuddy-collab-012
+## 2026-04-22 13:15 - 协作贡献 #WorkBuddy-collab-013
+
+### 观察 (Observations)
+- 仓库无新变更（Already up to date），Kraber 暂无新 push
+- collab-012 的 "下次建议" 明确指向 Kernel 8 (Persistent Kernel) 作为 Phase 3 第二任务
+- PROGRESS.md Phase 3 进度为 1/4 (25%)，Kernel 7 完成后下一步是 K8
+- INTERVIEW_PREP.md 和 flash_attention.h 仅到 K7，K8 完全空白
+- training_pipeline.py 已完善（包含 PSNR 评估 + 密度控制集成），无明显缺口
+- 核心任务：实现 Phase 3 Task 2 — Persistent Kernel Flash Attention
+
+### 贡献 (Contributions)
+
+#### Kernel 8 — Persistent Kernel Flash Attention ✅
+
+**新增** `kernels/kernel_08_persistent.cu`（~370行）
+
+**核心思路**：颠覆 K1-K7 的 "每个 query tile 一个 block" 调度模型：
+
+```
+K1-K7 (标准调度):
+  grid = (N_q_tiles × heads × batch)
+  e.g. seq=4096, h=16, b=4 → 43,648 blocks
+  RTX 4080 (76 SMs) → ~574 scheduling waves
+  每 wave: 重新调度 + 初始化 shared memory + 运行 → 累积开销显著
+
+K8 (持久化):
+  grid = (num_SMs, 1, 1) = (76, 1, 1)    ← 固定，只启动一次
+  每个 block 循环: atomicAdd(g_work_counter, 1) → 获取 tile_id
+  当 tile_id >= total_tiles 时退出
+  ONE kernel launch, ONE scheduling wave, 自然负载均衡
+```
+
+**全局 Work Queue 实现**：
+```cuda
+// Host 端分配、初始化为 0
+int* d_work_counter;  // 一个 int，放在 device memory
+
+// 每个 block 持续抢占工作:
+int work_id = atomicAdd(d_work_counter, 1);
+if (work_id >= total_tiles) break;
+
+// 解码: tile_id → (batch, head, q_tile)
+int q_tile = work_id % num_q_tiles;
+int head   = (work_id / num_q_tiles) % num_heads;
+int batch  = (work_id / num_q_tiles) / num_heads;
+```
+
+**架构与继承**：
+- Block: (32, 8, 1) = 256 threads，8 warps（同 K7）
+- warp 0-1 (PRODUCERS): 加载 K/V via cp.async，3-slot 环形缓冲（继承 K6/K7）
+- warp 2-7 (CONSUMERS): 6 consumer warps 处理 Q tile 中的 6 个 query rows
+- **新增 Q tile smem 缓存**: 每个 work item 开始时，全部 256 线程协同从 HBM 加载 Q tile 到 smem，consumer 直接读 smem → 节省 6× HBM 流量
+- SMEM_PAD=1 bank-conflict-free layout（继承 K4）
+- `__nanosleep(10)` 自旋等待（继承 K7 通信协议）
+
+**性能预期**：
+| Config | 收益理由 |
+|--------|---------|
+| seq=1024, h=8, b=1 | 0-3%（wave数少，overhead小）|
+| seq=4096, h=16, b=4 | 5-15%（574个wave全部消除）|
+| seq=8192+           | 10-20%（wave数更多）|
+
+**与工业界关联（面试重点）**：
+- CUTLASS 3.x：`PersistentTileScheduler` — 完全相同的思想，更通用
+- FlashAttention 3（Tri Dao, 2024）：H100 上使用持久化 kernel + TMA 流水
+- cuDNN persistent GEMM：大 batch transformer 训练中的标准实现
+
+#### flash_attention.h 更新 ✅
+- 添加完整 `flash_attn_kernel_v8` 声明（含所有参数，包括 `g_work_counter` 和 `total_tiles`）
+- 添加 `launch_flash_attn_v8` host launcher 声明（自动查询 SM 数量，自动管理 work counter）
+- 详细 Doxygen 注释：persistent grid 设计、work queue 协议、性能预期、参考文献
+
+#### test_correctness.cu 更新 ✅
+- 添加 `run_test_v8()` 函数（与 v1-v7 结构完全对齐）
+- main() 中添加 v8 测试循环
+- Build 注释：加入 `kernel_08_persistent.cu`
+- Summary 输出：`KERNEL V8 (Persistent Kernel): X / 8 tests passed`
+- 打印：更新 header 到 "Kernel v8: Persistent Kernel"
+
+#### PROGRESS.md 更新 ✅
+- Phase 3 从 1/4 (25%) → 2/4 (50%)
+- Total 从 8/17 (47%) → 9/17 (53%)
+- Project Status：添加 Phase 2 Complete 标记
+- Active Tasks 表：添加 T8 Done 行
+- Completed Tasks 表：添加 K8 完成记录
+- Performance Benchmarks：添加 K8 4 行（TBD），特别包含 seq=4096 LLM-style
+- Optimization Journey Map 第 8 行：从 "A100 profiling" 更新为 "Persistent kernel"
+- 注释：添加 K8 性能预期说明
+- Last Updated → 2026-04-22 13:15
+
+#### INTERVIEW_PREP.md 更新 ✅
+- Kernels Completed: 7 → 8
+- 面试故事更新：加入 K8 持久化描述
+- 添加完整 Kernel 8 章节（~50行）
+  - "Wave Problem" 量化分析
+  - Global work queue 代码示例
+  - Warp roles + Q tile smem cache 说明
+  - 性能预期表格（按 seq_len 分级）
+  - 与 CUTLASS / FA3 / cuDNN 的关联
+  - 面试 Talking Point（含 Q&A：负载均衡、适用范围、atomic 瓶颈）
+- Performance Numbers：添加 K8 TBD 行
+- Correctness Verification：更新为 v1-v8
+
+### 反思 (Reflection)
+- **Persistent Kernel 是调度层面的优化**：K1-K7 优化了"如何计算一个 tile"；K8 优化了"如何调度所有 tile"。这是不同抽象层面的思维跃迁，面试时能清晰区分"compute optimization" vs "scheduling optimization"非常有价值。
+- **原子计数器的性能考量**：g_work_counter 的 atomicAdd 会不会成为瓶颈？计算一下：RTX 4080 有 76 SMs，每个 block 处理一个 tile（~几十微秒），因此 atomic 速率约 76/tile_time ≈ 76/(50μs) ≈ 1.5M ops/s，远低于 L2 atomic throughput（~100M ops/s）。不是瓶颈。
+- **与 K7 的关系**：K8 继承了 K7 的 warp specialization。在持久化框架下，producer 可以无缝地从当前 work item 的 K/V 加载过渡到下一个 work item——这是持久化与 warp specialization 结合的额外收益，超出了单纯的"减少 wave overhead"。
+- **Q tile 缓存是新贡献**：K7 中每个 consumer warp 从 HBM 加载自己的 Q 行；K8 引入共享 Q tile smem cache，256 线程协同加载一次，6 个 consumer warps 全部复用，进一步减少 HBM traffic。
+
+### 下次建议 (Next Steps)
+- **@Kraber**: 在 RTX 4080 上编译 K8 并测试：
+  ```bash
+  nvcc -O3 -arch=sm_89 -I../include tests/test_correctness.cu \
+    kernels/kernel_01_naive.cu kernels/kernel_02_tiling.cu \
+    kernels/kernel_03_cooperative.cu kernels/kernel_04_swizzle.cu \
+    kernels/kernel_05_double_buffer.cu kernels/kernel_06_cp_async.cu \
+    kernels/kernel_07_warp_specialization.cu \
+    kernels/kernel_08_persistent.cu \
+    -o test_all -lcudart \
+    --compiler-bindir "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.36.32532\bin\Hostx64\x64"
+  ./test_all
+  ```
+  重点：K8 vs K7 在 seq=4096, h=16, b=4 (= 43,648 tiles = 574 waves) 下的 TFLOPS 差异
+- **Kernel 9 候选**：Thread Block Clusters（sm_90 / Hopper 专属）
+  - 多个 block 共享 Distributed Shared Memory (DSMEM)
+  - 或：Register File Optimization（减少寄存器溢出，提高 occupancy）
+- **面试冲刺**：K8 的 "scheduling optimization vs compute optimization" 区分 + atomic 瓶颈分析是有深度的 follow-up 话题
+
+---
+
+
 
 ### 观察 (Observations)
 - 仓库无新变更（Already up to date），Kraber 暂无新 push

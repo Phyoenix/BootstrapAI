@@ -392,4 +392,78 @@ cudaError_t launch_flash_attn_v7(
     cudaStream_t stream = 0
 );
 
+/**
+ * Kernel 08: Persistent Kernel Flash Attention
+ *
+ * Key innovation: Replace per-query-tile grid with a FIXED grid of worker
+ * blocks (one per SM). Each block persistently picks work from a global
+ * atomic counter until all (batch, head, q_tile) triples are processed.
+ *
+ * Eliminates the "multiple wave" overhead of standard kernels:
+ *   Standard (K1-K7): grid = (N_q_tiles × heads × batch) → many scheduling waves
+ *   Persistent (K8):  grid = (num_SMs) → ONE wave, blocks loop over all work
+ *
+ * Inherits ALL optimizations from K4-K7:
+ *   - SMEM_PAD=1 bank-conflict-free layout
+ *   - cp.async PTX hardware-async HBM→SMEM copy (sm_80+)
+ *   - Warp specialization (2 producers + 6 consumers per block)
+ *   - Q tile smem cache (loaded once per work item, shared by consumers)
+ *
+ * Expected improvement:
+ *   - seq=1024, h=8, b=1: 0-5% (few waves anyway)
+ *   - seq=4096, h=16, b=4: 5-15% (many waves → persistent wins)
+ *   - seq=8192+:            increasing benefit as wave count grows
+ *
+ * Work decomposition:
+ *   - Global int counter g_work_counter: atomically-incremented
+ *   - tile_id → (batch_idx, head_idx, q_tile_idx) via integer decomposition
+ *   - Block exits when tile_id >= total_tiles
+ *
+ * Block configuration:
+ *   Grid:  (num_SMs, 1, 1)          — persistent, fixed
+ *   Block: (32, 8, 1) = 256 threads
+ *   warp 0,1: PRODUCERS (load K/V)
+ *   warp 2-7: CONSUMERS (compute attention)
+ *
+ * Reference:
+ *   CUTLASS PersistentTileScheduler; cuDNN persistent GEMM; FA3 on H100
+ *
+ * @param Q, K, V, O    Same layout as kernels v1-v7
+ * @param seq_len       Sequence length
+ * @param head_dim      Head dimension (32, 64, or 128)
+ * @param batch_stride  Stride between batches
+ * @param head_stride   Stride between heads
+ * @param softmax_scale 1.0 / sqrt(head_dim)
+ * @param num_heads     Number of attention heads
+ * @param batch_size    Batch size
+ * @param g_work_counter  Device pointer to global work queue counter (int)
+ * @param total_tiles   Total number of work items
+ */
+__global__ void flash_attn_kernel_v8(
+    const float* __restrict__ Q,
+    const float* __restrict__ K,
+    const float* __restrict__ V,
+    float*       __restrict__ O,
+    int          seq_len,
+    int          head_dim,
+    int64_t      batch_stride,
+    int64_t      head_stride,
+    float        softmax_scale,
+    int          num_heads,
+    int          batch_size,
+    int*         g_work_counter,
+    int          total_tiles
+);
+
+/**
+ * Launch kernel v8 with persistent grid + global work queue.
+ * Automatically queries SM count; allocates and frees d_work_counter.
+ * Falls back to kernel v7 on very small problems where overhead dominates.
+ */
+cudaError_t launch_flash_attn_v8(
+    const float* Q, const float* K, const float* V, float* O,
+    int batch_size, int num_heads, int seq_len, int head_dim,
+    cudaStream_t stream = 0
+);
+
 #endif // FLASH_ATTENTION_H

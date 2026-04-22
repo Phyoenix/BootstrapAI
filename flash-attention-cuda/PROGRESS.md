@@ -2,7 +2,8 @@
 > **Manager**: Kraber  
 > **Executor**: WorkBuddy  
 > **Last Updated**: 2026-04-22 12:57  
-> **Project Status**: Phase 1 Complete → Phase 2 In Progress
+> **Project Status**: Phase 1 Complete → Phase 2 Complete → Phase 3 In Progress
+
 
 ---
 
@@ -12,10 +13,10 @@
 |-------|-------|--------|----------|
 | Phase 1: Baseline | 4 tasks | Complete | 4/4 (100%) |
 | Phase 2: Memory Opt | 3 tasks | Complete | 3/3 (100%) |
-| Phase 3: Compute Opt | 4 tasks | In Progress | 1/4 (25%) |
+| Phase 3: Compute Opt | 4 tasks | In Progress | 2/4 (50%) |
 | Phase 4: Advanced | 6 tasks | Not Started | 0/6 (0%) |
 | HIP Port | 2 kernels | Complete | 2/2 (100%) |
-| **Total** | **17 + HIP** | **Phase 3 Started** | **8/17 (47%) + HIP** |
+| **Total** | **17 + HIP** | **Phase 3 In Progress** | **9/17 (53%) + HIP** |
 
 ---
 
@@ -32,6 +33,7 @@
 | T5 | Kernel 5: Double Buffering | WorkBuddy | Done | 2026-04-22 | 2026-04-22 | See benchmarks below (TBD on RTX 4080) |
 | T6 | Kernel 6: cp.async Hardware Pipeline | WorkBuddy | Done | 2026-04-22 | 2026-04-22 | See benchmarks below (TBD on RTX 4080) |
 | T7 | Kernel 7: Warp Specialization | WorkBuddy | Done | 2026-04-22 | 2026-04-22 | See benchmarks below (TBD on RTX 4080) |
+| T8 | Kernel 8: Persistent Kernel   | WorkBuddy | Done | 2026-04-22 | 2026-04-22 | See benchmarks below (TBD on RTX 4080) |
 | T3h | Kernel 3 HIP Port | WorkBuddy | Done | 2026-04-21 | 2026-04-21 | HIP port of cooperative |
 
 ### Completed Tasks
@@ -45,6 +47,7 @@
 | T5 | Kernel 5: Double Buffering | WorkBuddy | 2026-04-22 | Software pipeline; ping-pong smem; 8/8 tests expected |
 | T6 | Kernel 6: cp.async HW Pipeline | WorkBuddy | 2026-04-22 | Depth-3 ring buffer; cp.async PTX; sm_80+ guaranteed overlap |
 | T7 | Kernel 7: Warp Specialization | WorkBuddy | 2026-04-22 | Producer/consumer warps; dedicated load vs compute warps |
+| T8 | Kernel 8: Persistent Kernel   | WorkBuddy | 2026-04-22 | Global work queue; fixed SM-count grid; persistent blocks |
 
 ---
 
@@ -88,6 +91,10 @@
 | **Kernel 7 (WarpSpec)** | 256 | 64 | TBD | TBD | TBD vs K6 | - |
 | **Kernel 7 (WarpSpec)** | 1024 | 64 | TBD | TBD | TBD vs K6 | - |
 | **Kernel 7 (WarpSpec)** | 512 | 128 (8 heads) | TBD | TBD | TBD vs K6 | - |
+| **Kernel 8 (Persistent)** | 64 | 64 | TBD | TBD | TBD vs K7 | - |
+| **Kernel 8 (Persistent)** | 256 | 64 | TBD | TBD | TBD vs K7 | - |
+| **Kernel 8 (Persistent)** | 1024 | 64 | TBD | TBD | TBD vs K7 | - |
+| **Kernel 8 (Persistent)** | 4096 | 64 (8 heads) | TBD | TBD | TBD vs K7 (expect >+5%) | - |
 
 > Note: Kernel 5 (double buffering) is expected to show ~15-30% improvement over Kernel 4
 > for seq_len >= 512 where global memory latency constitutes a significant fraction of runtime.
@@ -95,6 +102,8 @@
 > expected additional ~10-20% over Kernel 5. On sm_89 (RTX 4080), cp.async is fully supported.
 > Kernel 7 (warp specialization) assigns 2 producer warps for K/V loads and 6 compute warps
 > for attention; expected ~5-15% over K6 by eliminating compute-vs-load resource contention.
+> Kernel 8 (persistent) launches exactly num_SMs blocks; each block loops over global work
+> queue via atomicAdd; expected ~5-15% over K7 for seq>=4096 where many scheduling waves exist.
 
 ### Correctness
 
@@ -150,7 +159,7 @@
 | 5 | Double buffering | "Overlap DRAM load of tile T+1 with compute on tile T, 15-30% gain for seq≥512" |
 | 6 | cp.async (Ampere) | "True async HBM→SMEM without registers; depth-3 ring buffer; 10-20% over K5" |
 | 7 | Warp specialization | "2 producer warps load K/V; 6 compute warps do attention; removes contention" |
-| 8 | A100 profiling | "Used Nsight Compute to identify bottlenecks" |
+| 8 | Persistent kernel   | "Fixed SM-count grid; global atomic work queue; one launch covers all tiles" |
 | ... | ... | ... |
 | 16 | Final tuning | "Achieved 99.2% of cuDNN performance" |
 
@@ -200,5 +209,5 @@
 
 ---
 
-**Last Updated**: 2026-04-19 20:40 by WorkBuddy
-**Next Update**: After Task 2 completion
+**Last Updated**: 2026-04-22 13:15 by WorkBuddy
+**Next Update**: After Task 3 (Phase 3 K9) completion
