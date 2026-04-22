@@ -1,7 +1,7 @@
 # Flash Attention Project - Progress Tracking
 > **Manager**: Kraber  
 > **Executor**: WorkBuddy  
-> **Last Updated**: 2026-04-22 12:57  
+> **Last Updated**: 2026-04-23 02:31  
 > **Project Status**: Phase 1 Complete → Phase 2 Complete → Phase 3 In Progress
 
 
@@ -13,10 +13,10 @@
 |-------|-------|--------|----------|
 | Phase 1: Baseline | 4 tasks | Complete | 4/4 (100%) |
 | Phase 2: Memory Opt | 3 tasks | Complete | 3/3 (100%) |
-| Phase 3: Compute Opt | 4 tasks | In Progress | 2/4 (50%) |
+| Phase 3: Compute Opt | 4 tasks | In Progress | 3/4 (75%) |
 | Phase 4: Advanced | 6 tasks | Not Started | 0/6 (0%) |
 | HIP Port | 2 kernels | Complete | 2/2 (100%) |
-| **Total** | **17 + HIP** | **Phase 3 In Progress** | **9/17 (53%) + HIP** |
+| **Total** | **17 + HIP** | **Phase 3 In Progress** | **10/17 (59%) + HIP** |
 
 ---
 
@@ -34,6 +34,7 @@
 | T6 | Kernel 6: cp.async Hardware Pipeline | WorkBuddy | Done | 2026-04-22 | 2026-04-22 | See benchmarks below (TBD on RTX 4080) |
 | T7 | Kernel 7: Warp Specialization | WorkBuddy | Done | 2026-04-22 | 2026-04-22 | See benchmarks below (TBD on RTX 4080) |
 | T8 | Kernel 8: Persistent Kernel   | WorkBuddy | Done | 2026-04-22 | 2026-04-22 | See benchmarks below (TBD on RTX 4080) |
+| T9 | Kernel 9: GQA (Grouped Query Attention) | WorkBuddy | Done | 2026-04-23 | 2026-04-23 | MHA/GQA/MQA unified; LLaMA-3 compatible |
 | T3h | Kernel 3 HIP Port | WorkBuddy | Done | 2026-04-21 | 2026-04-21 | HIP port of cooperative |
 
 ### Completed Tasks
@@ -48,6 +49,7 @@
 | T6 | Kernel 6: cp.async HW Pipeline | WorkBuddy | 2026-04-22 | Depth-3 ring buffer; cp.async PTX; sm_80+ guaranteed overlap |
 | T7 | Kernel 7: Warp Specialization | WorkBuddy | 2026-04-22 | Producer/consumer warps; dedicated load vs compute warps |
 | T8 | Kernel 8: Persistent Kernel   | WorkBuddy | 2026-04-22 | Global work queue; fixed SM-count grid; persistent blocks |
+| T9 | Kernel 9: GQA Flash Attention | WorkBuddy | 2026-04-23 | H_kv mapping; group_size; MHA/GQA/MQA unified; 10 GQA correctness tests |
 
 ---
 
@@ -95,6 +97,9 @@
 | **Kernel 8 (Persistent)** | 256 | 64 | TBD | TBD | TBD vs K7 | - |
 | **Kernel 8 (Persistent)** | 1024 | 64 | TBD | TBD | TBD vs K7 | - |
 | **Kernel 8 (Persistent)** | 4096 | 64 (8 heads) | TBD | TBD | TBD vs K7 (expect >+5%) | - |
+| **Kernel 9 (GQA/MHA)** | 256 | 64 (H_q=8, H_kv=8) | TBD | TBD | TBD vs K4 (MHA mode) | - |
+| **Kernel 9 (GQA)** | 256 | 64 (H_q=8, H_kv=2) | TBD | TBD | TBD vs K9-MHA (expect ~4× KV BW↓) | - |
+| **Kernel 9 (MQA)** | 256 | 64 (H_q=8, H_kv=1) | TBD | TBD | TBD vs K9-MHA (expect ~8× KV BW↓) | - |
 
 > Note: Kernel 5 (double buffering) is expected to show ~15-30% improvement over Kernel 4
 > for seq_len >= 512 where global memory latency constitutes a significant fraction of runtime.
@@ -160,6 +165,7 @@
 | 6 | cp.async (Ampere) | "True async HBM→SMEM without registers; depth-3 ring buffer; 10-20% over K5" |
 | 7 | Warp specialization | "2 producer warps load K/V; 6 compute warps do attention; removes contention" |
 | 8 | Persistent kernel   | "Fixed SM-count grid; global atomic work queue; one launch covers all tiles" |
+| 9 | GQA (Grouped Query) | "Unified MHA/GQA/MQA; h_kv=h_q/group; LLaMA-3: 4× KV cache reduction" |
 | ... | ... | ... |
 | 16 | Final tuning | "Achieved 99.2% of cuDNN performance" |
 
@@ -209,5 +215,5 @@
 
 ---
 
-**Last Updated**: 2026-04-22 13:15 by WorkBuddy
-**Next Update**: After Task 3 (Phase 3 K9) completion
+**Last Updated**: 2026-04-23 02:31 by WorkBuddy
+**Next Update**: After Task 4 (Phase 3 K10 or @Kraber RTX 4080 benchmarks) completion

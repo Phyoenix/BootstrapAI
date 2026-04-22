@@ -466,4 +466,111 @@ cudaError_t launch_flash_attn_v8(
     cudaStream_t stream = 0
 );
 
+/**
+ * Kernel 09: Grouped Query Attention (GQA) Flash Attention
+ *
+ * Key innovation: Generalizes Flash Attention to support MHA, MQA, and GQA —
+ * the attention variants used in LLaMA 2/3, Mistral, Gemma, GPT-4, and
+ * virtually every modern production LLM.
+ *
+ * Attention variants supported (all via the same kernel):
+ *   - MHA: num_heads_kv == num_heads_q (Multi-Head Attention, K1-K8 behavior)
+ *   - MQA: num_heads_kv == 1           (Multi-Query Attention, Shazeer 2019)
+ *   - GQA: 1 < num_heads_kv < num_heads_q (Grouped Query Attention, Ainslie 2023)
+ *
+ * Head grouping:
+ *   - group_size = num_heads_q / num_heads_kv  (must divide evenly)
+ *   - Query head h_q uses K/V from head h_kv = h_q / group_size
+ *
+ * Data layout:
+ *   Q: [batch, num_heads_q,  seq_len, head_dim]  — full Q matrix
+ *   K: [batch, num_heads_kv, seq_len, head_dim]  — reduced K
+ *   V: [batch, num_heads_kv, seq_len, head_dim]  — reduced V
+ *   O: [batch, num_heads_q,  seq_len, head_dim]  — full output
+ *
+ * Memory savings vs MHA (for KV cache in inference):
+ *   KV cache ∝ num_heads_kv / num_heads_q
+ *   LLaMA-3 8B: H_q=32, H_kv=8 → 4× reduction
+ *   MQA:        H_q=32, H_kv=1 → 32× reduction
+ *
+ * Optimizations (inherited from K4/K5/K6):
+ *   - SMEM_PAD=1 bank-conflict-free shared memory layout
+ *   - cp.async PTX (sm_80+) for hardware-async HBM→SMEM copy
+ *   - Double-buffered tile prefetch (K5 style)
+ *   - Warp-per-query-row assignment (K3 cooperative pattern)
+ *
+ * Block configuration:
+ *   Grid:  (ceil(seq_len / Q_BLOCK_V9), num_heads_q, batch_size)
+ *   Block: (32, 8, 1) = 256 threads = 8 warps
+ *   Each warp handles one Q row.
+ *
+ * Expected performance vs K8 (MHA):
+ *   - MHA mode (group_size=1): ~equal (+/- noise)
+ *   - GQA group_size=4: K/V HBM reads ↓4× → significant speedup when memory-bound
+ *   - MQA (group_size=H): maximum KV traffic reduction
+ *
+ * Production relevance:
+ *   LLaMA-2/3, Mistral-7B, Gemma, PaLM-2, GPT-4 (speculated) all use GQA.
+ *   vLLM, TensorRT-LLM, Hugging Face TGI implement GQA for efficient inference.
+ *
+ * @param Q        Query  [B, H_q,  N, D]
+ * @param K        Key    [B, H_kv, N, D]   (H_kv <= H_q, must divide H_q)
+ * @param V        Value  [B, H_kv, N, D]
+ * @param O        Output [B, H_q,  N, D]
+ * @param seq_len      Sequence length
+ * @param head_dim     Head dimension (32, 64, or 128)
+ * @param num_heads_q  Total query heads (H_q)
+ * @param num_heads_kv Key/Value heads (H_kv)
+ * @param group_size   H_q / H_kv
+ * @param q_batch_stride   Stride for batch dim of Q (H_q * N * D)
+ * @param q_head_stride    Stride for head dim of Q  (N * D)
+ * @param kv_batch_stride  Stride for batch dim of K/V (H_kv * N * D)
+ * @param kv_head_stride   Stride for head dim of K/V (N * D)
+ * @param softmax_scale    1 / sqrt(head_dim)
+ */
+__global__ void flash_attn_kernel_v9(
+    const float* __restrict__ Q,
+    const float* __restrict__ K,
+    const float* __restrict__ V,
+    float*       __restrict__ O,
+    int   seq_len,
+    int   head_dim,
+    int   num_heads_q,
+    int   num_heads_kv,
+    int   group_size,
+    int64_t  q_batch_stride,
+    int64_t  q_head_stride,
+    int64_t  kv_batch_stride,
+    int64_t  kv_head_stride,
+    float    softmax_scale
+);
+
+/**
+ * Launch kernel v9 with GQA support.
+ * Supports MHA (H_kv == H_q), MQA (H_kv == 1), and GQA (1 < H_kv < H_q).
+ * Q and K/V can have different head counts; H_q must be divisible by H_kv.
+ */
+cudaError_t launch_flash_attn_v9(
+    const float* Q,       // [B, H_q,  N, D]
+    const float* K,       // [B, H_kv, N, D]
+    const float* V,       // [B, H_kv, N, D]
+    float*       O,       // [B, H_q,  N, D]
+    int batch_size,
+    int num_heads_q,
+    int num_heads_kv,
+    int seq_len,
+    int head_dim,
+    cudaStream_t stream = 0
+);
+
+/**
+ * Convenience launcher for standard MHA mode (backward-compatible with K1-K8).
+ * Equivalent to launch_flash_attn_v9 with num_heads_kv == num_heads_q.
+ */
+cudaError_t launch_flash_attn_v9_mha(
+    const float* Q, const float* K, const float* V, float* O,
+    int batch_size, int num_heads, int seq_len, int head_dim,
+    cudaStream_t stream = 0
+);
+
 #endif // FLASH_ATTENTION_H
